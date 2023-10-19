@@ -1,0 +1,2020 @@
+---
+title: "Sample Model Tester V2"
+author: "Dieter Brand"
+date: '2023-06-15'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(dplyr)
+library(bit64)
+library(reshape2)
+library(lubridate)
+library(stringr)
+library(rgdal)
+library(maptools)
+# library(raster)
+library(sp)
+library(sf)
+library(lwgeom)
+library(readxl)
+library(tools)
+
+library(tidyr)
+'%!in%' = Negate('%in%')
+library(splines)
+library(ggplot2)
+library(glmnet)
+library(lfe)
+library(fastDummies)
+options(scipen=999)
+library(kableExtra)
+```
+
+#This one has sign restrictions fed through
+
+# County Read In
+```{r}
+AllData <- as.data.frame(fread("F:/Honours/Data/data_county.csv"))
+AllData <- AllData %>% mutate(YearQuarter = yq(paste0(year, "-", quarter)))
+AllData <- AllData %>% mutate(CountyState = paste0(state, "-", county))
+AllData <- AllData %>% unique()
+ObsCounty <- AllData %>% group_by(CountyState) %>% summarise(Obs = length(YearQuarter)) %>% arrange(desc(Obs))
+```
+
+### FederalDataReadIn
+```{r}
+CPI <- readxl::read_xlsx("F:/Honours/Data/FRED Data/CPI.xlsx")
+FFR <- readxl::read_xlsx("F:/Honours/Data/FRED Data/FFR.xlsx")
+GDP <- readxl::read_xlsx("F:/Honours/Data/FRED Data/NominalGDP.xlsx")
+#GDP <- readxl::read_xlsx("F:/Honours/Data/FRED Data/RealGDP.xlsx")
+
+colnames(CPI) <- c("YQ", "dCPI")
+CPI <- CPI %>% mutate(dCPI_0 = dCPI,
+                      dCPI_1 = lag(dCPI, 1),
+                      dCPI_2 = lag(dCPI, 2),
+                      dCPI_3 = lag(dCPI, 3),
+                      dCPI_4 = lag(dCPI, 4),
+                      dCPI_5 = lag(dCPI, 5),
+                      dCPI_6 = lag(dCPI, 6),
+                      dCPI_7 = lag(dCPI, 7),
+                      dCPI_8 = lag(dCPI, 8),
+                      dCPI_9 = lag(dCPI, 9),
+                      dCPI_10 = lag(dCPI, 10),
+                      dCPI_11 = lag(dCPI, 11),
+                      dCPI_12 = lag(dCPI, 12))
+
+colnames(FFR) <- c("YQ", "FFR")
+FFR <- FFR %>% filter(month(YQ) %in% c(1,4,7,10)) %>% filter(day(YQ) == 1) %>% mutate(FFR_0 = FFR,
+                      FFR_1 = lag(FFR, 1),
+                      FFR_2 = lag(FFR, 2),
+                      FFR_3 = lag(FFR, 3),
+                      FFR_4 = lag(FFR, 4),
+                      FFR_5 = lag(FFR, 5),
+                      FFR_6 = lag(FFR, 6),
+                      FFR_7 = lag(FFR, 7),
+                      FFR_8 = lag(FFR, 8),
+                      FFR_9 = lag(FFR, 9),
+                      FFR_10 = lag(FFR, 10),
+                      FFR_11 = lag(FFR, 11),
+                      FFR_12 = lag(FFR, 12))
+
+
+colnames(GDP) <- c("YQ", "GDP")
+GDP <- GDP %>% mutate(dlog_GDP = log(GDP/lag(GDP,1)))
+GDP <- GDP %>% mutate(dlog_GDP_0 = dlog_GDP,
+                      dlog_GDP_1 = lag(dlog_GDP, 1),
+                      dlog_GDP_2 = lag(dlog_GDP, 2),
+                      dlog_GDP_3 = lag(dlog_GDP, 3),
+                      dlog_GDP_4 = lag(dlog_GDP, 4),
+                      dlog_GDP_5 = lag(dlog_GDP, 5),
+                      dlog_GDP_6 = lag(dlog_GDP, 6),
+                      dlog_GDP_7 = lag(dlog_GDP, 7),
+                      dlog_GDP_8 = lag(dlog_GDP, 8),
+                      dlog_GDP_9 = lag(dlog_GDP, 9),
+                      dlog_GDP_10 = lag(dlog_GDP, 10),
+                      dlog_GDP_11 = lag(dlog_GDP, 11),
+                      dlog_GDP_12 = lag(dlog_GDP, 12))
+
+
+pdatanew <- pdatanew %>% mutate(YQ = yq(paste(year, quarter, sep = "-")))
+pdatanew <- pdatanew %>% left_join(CPI, by = "YQ") %>% left_join(FFR, by = "YQ") %>% left_join(GDP, by = "YQ")
+
+```
+
+
+### Removed NAs
+```{r}
+pdatanew <- AllData %>% na.omit()
+pdatanew <- pdatanew %>% mutate(QuarterChar = as.character(quarter))
+#CSMINS <- pdatanew %>% group_by(CountyState) %>% summarise(Obs = length(YearQuarter)) %>% filter(Obs < 13)
+#pdatanew <- pdatanew %>% filter(CountyState %!in% CSMINS$CountyState) WHY???
+```
+
+
+# Read in Individual Loans
+```{r}
+set.seed(28804783)
+final2 <- fread("F:/Honours/Data/Mortgage Data/Outputs V2 FM/SampledAllFLoans.csv")
+ChosenSampleDataA2 <- final2 %>% filter(del_for == 1)
+ChosenSampleDataB2 <- final2 %>% filter(del_for == 0)
+
+
+
+AllData <- as.data.frame(fread("F:/Honours/Data/Mortgage Data/Outputs/data_zip3.csv"))
+AllData <- AllData %>% unique()
+ChosenSampleDataA2 <- ChosenSampleDataA2 %>% left_join(AllData,by = c("state", "zip3", "year", "quarter"))%>% select(-c(loan_id, balance, del_30p, del_60p, del_90p, del_180p, e_ur_0, e_ur_1, e_ur_2, e_ur_3, e_ur_4, e_ur_5, e_ur_6, e_ur_7, e_ur_8, e_ur_9, e_ur_10, e_ur_11, e_ur_12, d_biological_0, d_biological_1, d_biological_2, d_biological_3, d_biological_4, d_biological_5, d_biological_6, d_biological_7, d_biological_8, d_biological_9, d_biological_10, d_biological_11, d_biological_12, d_other_0, d_other_1, d_other_2, d_other_3, d_other_4, d_other_5, d_other_6, d_other_7, d_other_8, d_other_9, d_other_10, d_other_11, d_other_12,d_storm_summer_p1,d_storm_summer_p2,d_storm_summer_p3,d_storm_summer_p4,d_storm_winter_p1,d_storm_winter_p2,d_storm_winter_p3,d_storm_winter_p4,d_fire_p1,d_fire_p2,d_fire_p3,d_fire_p4,d_flood_p1,d_flood_p2,d_flood_p3,d_flood_p4)) %>% na.omit()
+ChosenSampleDataB2 <- ChosenSampleDataB2 %>% left_join(AllData,by = c("state", "zip3", "year", "quarter"))%>% select(-c(loan_id, balance, del_30p, del_60p, del_90p, del_180p, e_ur_0, e_ur_1, e_ur_2, e_ur_3, e_ur_4, e_ur_5, e_ur_6, e_ur_7, e_ur_8, e_ur_9, e_ur_10, e_ur_11, e_ur_12, d_biological_0, d_biological_1, d_biological_2, d_biological_3, d_biological_4, d_biological_5, d_biological_6, d_biological_7, d_biological_8, d_biological_9, d_biological_10, d_biological_11, d_biological_12, d_other_0, d_other_1, d_other_2, d_other_3, d_other_4, d_other_5, d_other_6, d_other_7, d_other_8, d_other_9, d_other_10, d_other_11, d_other_12,d_storm_summer_p1,d_storm_summer_p2,d_storm_summer_p3,d_storm_summer_p4,d_storm_winter_p1,d_storm_winter_p2,d_storm_winter_p3,d_storm_winter_p4,d_fire_p1,d_fire_p2,d_fire_p3,d_fire_p4,d_flood_p1,d_flood_p2,d_flood_p3,d_flood_p4)) %>% na.omit()
+
+
+ChosenSampleDataB2 <- ChosenSampleDataB2 %>% sample_n(nrow(ChosenSampleDataA2))
+ChosenSampleDataFF2 <- rbind(ChosenSampleDataA2,ChosenSampleDataB2)
+
+
+
+
+	# calculating age for mortgage data
+		ChosenSampleDataFF2$age 	<- ( ChosenSampleDataFF2$year + ChosenSampleDataFF2$quarter/4 - 1/4 ) - ( ChosenSampleDataFF2$oyear + 1/4 - 1/4 )
+	# creating spline basis for age
+		age_ns_obj 			<- ns( ChosenSampleDataFF2$age, knots=c(2,5,10) );
+		age_ns_basis 		<- age_ns_obj[,1:NCOL(age_ns_obj)];
+		colnames(age_ns_basis) 	<- paste0( "age_", 1:NCOL(age_ns_basis) );
+		ChosenSampleDataFF2 		<- cbind( ChosenSampleDataFF2, age_ns_basis );
+
+ChosenSampleDataFF2 <- ChosenSampleDataFF2 %>% mutate(purpose = as.factor(purpose),
+                                                    prop = as.factor(prop),
+                                                    occ_status = as.factor(occ_status),
+                                                    quarter = as.factor(as.character(quarter)))
+
+
+rm(ChosenSampleDataB2)
+rm(ChosenSampleDataA2)
+
+ChosenSampleDataFF2 <- ChosenSampleDataFF2 %>% mutate(YQ = yq(paste(year, quarter, sep = "-"))) %>% left_join(CPI, by = "YQ") %>% left_join(FFR, by = "YQ") %>% left_join(GDP, by = "YQ")
+gc()
+
+```
+
+
+#glmnet restrict
+```{r}
+# glmnetdatax <- ChosenSampleDataFF2 %>% select(age_1,age_2,age_3,age_4,quarter,purpose,prop,occ_status,cscore,oltv,n_borrowers,dti, e_emp_dlog_0 , e_emp_dlog_1 , e_emp_dlog_2 , e_emp_dlog_3 , e_emp_dlog_4 , e_emp_dlog_5 , e_emp_dlog_6 , e_emp_dlog_7 , e_emp_dlog_8 , e_emp_dlog_9 , e_emp_dlog_10 , e_emp_dlog_11 , e_emp_dlog_12, e_hpi_dlog_0 , e_hpi_dlog_1 , e_hpi_dlog_2 , e_hpi_dlog_3 , e_hpi_dlog_4 , e_hpi_dlog_5 , e_hpi_dlog_6 , e_hpi_dlog_7 , e_hpi_dlog_8 , e_hpi_dlog_9 , e_hpi_dlog_10 , e_hpi_dlog_11 , e_hpi_dlog_12, d_storm_winter_0 , d_storm_winter_1 , d_storm_winter_2 , d_storm_winter_3 , d_storm_winter_4 , d_storm_winter_5 , d_storm_winter_6 , d_storm_winter_7 , d_storm_winter_8, d_storm_winter_9, d_storm_winter_10, d_storm_winter_11, d_storm_winter_12 ,d_storm_summer_0 , d_storm_summer_1 , d_storm_summer_2 , d_storm_summer_3 , d_storm_summer_4 , d_storm_summer_5 , d_storm_summer_6 , d_storm_summer_7 , d_storm_summer_8, d_storm_summer_9 , d_storm_summer_10 , d_storm_summer_11 , d_storm_summer_12 ,d_fire_0 , d_fire_1 , d_fire_2 , d_fire_3 , d_fire_4 , d_fire_5 , d_fire_6 , d_fire_7 , d_fire_8, d_fire_9 , d_fire_10 , d_fire_11 , d_fire_12, d_flood_0 , d_flood_1 , d_flood_2 , d_flood_3 , d_flood_4 , d_flood_5 , d_flood_6 , d_flood_7 , d_flood_8, d_flood_9 , d_flood_10 , d_flood_11 , d_flood_12, state, dCPI_0,dCPI_1,dCPI_2,dCPI_3,dCPI_4,dCPI_5,dCPI_6,dCPI_7,dCPI_8,dCPI_9,dCPI_10,dCPI_11,dCPI_12)
+# 
+# 
+# 
+# glmnetdatax <- glmnetdatax %>% dummy_cols(select_columns = 'state') %>% select(-state)
+# statedummylabel <- colnames(glmnetdatax)[grepl("state",colnames(glmnetdatax))]
+# glmnetdatax <- glmnetdatax %>% select(-state_AK)
+# glmnetdatax <- glmnetdatax %>% dummy_cols(select_columns = 'quarter') %>% select(-quarter) %>% dummy_cols(select_columns = 'purpose') %>% select(-purpose) %>% dummy_cols(select_columns = 'prop') %>% select(-prop) %>% dummy_cols(select_columns = 'occ_status') %>% select(-occ_status) 
+# glmnetdatax <- glmnetdatax %>% select(-quarter_1, -purpose_C, -prop_CO, -occ_status_I)
+# 
+# 
+# glmnetdatay <- ChosenSampleDataFF2$del_for
+# 
+# lowerlimitvector <- c(-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,
+#                       -Inf, -Inf, -Inf, -Inf, -Inf, -Inf,-Inf,
+#                       -Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,
+#                       -Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,
+#                       -Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,
+#                       -Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,
+#                       -Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,
+#                       -Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,
+#                       -Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,-Inf,
+#                       -Inf,-Inf,-Inf, -Inf, rep(-Inf, 49), rep(-Inf, 24))
+#                       
+#                       
+#                       
+# upperlimitvector <- c(Inf,Inf,Inf,Inf,Inf,Inf,
+#                       Inf,Inf,
+#                       0,0,0,0,0,
+#                       0,0,0,0,0,0,0,0,0,0,
+#                       0,0,0,0,0,0,0,0,0,0,
+#                       0,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,
+#                       Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,
+#                       Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,
+#                       Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,
+#                       Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,Inf,
+#                       Inf,Inf,Inf, rep(Inf, 49), rep(Inf, 25))
+  
+  
+
+
+# restrict_ind <- glmnet(glmnetdatax, glmnetdatay, family = "gaussian", lambda = 0,
+#               intercept = FALSE,
+#               standardize = FALSE,
+#               lower.limits = lowerlimitvector,
+#               upper.limits = upperlimitvector)
+
+#coef(restrict_ind)
+#########################
+
+
+f1 <- as.formula("del_for ~ age_1 + age_2 + age_3 + age_4 + quarter + purpose + prop + occ_status + cscore + oltv + n_borrowers + dti + e_emp_dlog_6 + e_emp_dlog_7 + e_emp_dlog_8 + e_emp_dlog_9 + e_emp_dlog_10 + e_emp_dlog_11 + e_emp_dlog_12 + e_hpi_dlog_0+ e_hpi_dlog_1 + e_hpi_dlog_2 + e_hpi_dlog_3 + e_hpi_dlog_4 + e_hpi_dlog_5 + e_hpi_dlog_6 + e_hpi_dlog_7 + e_hpi_dlog_8 + e_hpi_dlog_9 + e_hpi_dlog_10 + e_hpi_dlog_11 + e_hpi_dlog_12 + d_storm_winter_0 + d_storm_winter_1 + d_storm_winter_2 + d_storm_winter_3 + d_storm_winter_4 + d_storm_winter_5 + d_storm_winter_6 + d_storm_winter_7 + d_storm_winter_8 + d_storm_winter_9 + d_storm_winter_10 + d_storm_winter_11 + d_storm_winter_12 + d_storm_summer_0 + d_storm_summer_1 + d_storm_summer_2 + d_storm_summer_3 + d_storm_summer_4 + d_storm_summer_5 + d_storm_summer_6 + d_storm_summer_7 + d_storm_summer_8 + d_storm_summer_9 + d_storm_summer_10 + d_storm_summer_11 + d_storm_summer_12 + d_fire_0 + d_fire_1 + d_fire_2 + d_fire_3 + d_fire_4 + d_fire_5 + d_fire_6 + d_fire_7 + d_fire_8 + d_fire_9 + d_fire_10 + d_fire_11 + d_fire_12 + d_flood_0 + d_flood_1 + d_flood_2 + d_flood_3 + d_flood_4 + d_flood_5 + d_flood_6 + d_flood_7 + d_flood_8 + d_flood_9 + d_flood_10 + d_flood_11 + d_flood_12 + dCPI_0 + dCPI_1 + dCPI_2 + dCPI_3 + dCPI_4 + dCPI_5 + dCPI_6 + dCPI_7 + dCPI_8 + dCPI_9 + dCPI_10 + dCPI_11 + dCPI_12|state")
+
+
+ind_glm <- felm(formula = f1,
+                    data=as.data.frame(na.omit(ChosenSampleDataFF2)))
+
+
+ind_glm$coefficients %>% as.data.frame()
+ind_glm$vcv
+ind_glm %>% summary
+
+ind_coefs <- summary(ind_glm)$coefficients
+rownames(ind_coefs) <- gsub("summer", "tropical",rownames(summary(ind_glm)$coefficients))
+
+ind_coefs %>% as.data.frame() %>% head(55) %>% round(4) %>% kbl() %>% kable_classic_2(full_width = F) %>% save_kable("F:/Honours/Writeup V2/Graphs/PD1.2.png")
+ind_coefs %>% as.data.frame() %>% tail(50) %>% round(4)%>% kbl() %>% kable_classic_2(full_width = F) %>% save_kable("F:/Honours/Writeup V2/Graphs/PD2.2.png")
+
+
+CreditRiskCoefs <- ind_coefs %>% as.data.frame()
+CreditRiskCoefs <- CreditRiskCoefs[8:20,]
+CreditRiskCoefs  %>% round(4)%>% kbl() %>% kable_classic_2(full_width = F) %>% save_kable("F:/Honours/Writeup V2/Graphs/CreditRiskCoefficients.png")
+
+```
+
+# felm
+
+
+### emp felm
+```{r}
+
+f1 <- as.formula("e_emp_dlog_0 ~ e_emp_dlog_1 + e_emp_dlog_2 + e_emp_dlog_3 + e_emp_dlog_4 + e_emp_dlog_5 + e_emp_dlog_6 + e_emp_dlog_7 + e_emp_dlog_8 + e_emp_dlog_9 + e_emp_dlog_10 + e_emp_dlog_11 + e_emp_dlog_12 + e_hpi_dlog_1 + e_hpi_dlog_2 + e_hpi_dlog_3 + e_hpi_dlog_4 + e_hpi_dlog_5 + e_hpi_dlog_6 + e_hpi_dlog_7 + e_hpi_dlog_8 + e_hpi_dlog_9 + e_hpi_dlog_10 + e_hpi_dlog_11 + e_hpi_dlog_12 + d_storm_winter_0 + d_storm_winter_1 + d_storm_winter_2 + d_storm_winter_3 + d_storm_winter_4 + d_storm_winter_5 + d_storm_winter_6 + d_storm_winter_7 + d_storm_winter_8 + d_storm_winter_9 + d_storm_winter_10 + d_storm_winter_11 + d_storm_winter_12 + d_storm_summer_0 + d_storm_summer_1 + d_storm_summer_2 + d_storm_summer_3 + d_storm_summer_4 + d_storm_summer_5 + d_storm_summer_6 + d_storm_summer_7 + d_storm_summer_8 + d_storm_summer_9 + d_storm_summer_10 + d_storm_summer_11 + d_storm_summer_12 + d_fire_0 + d_fire_1 + d_fire_2 + d_fire_3 + d_fire_4 + d_fire_5 + d_fire_6 + d_fire_7 + d_fire_8 + d_fire_9 + d_fire_10 + d_fire_11 + d_fire_12 + d_flood_0 + d_flood_1 + d_flood_2 + d_flood_3 + d_flood_4 + d_flood_5 + d_flood_6 + d_flood_7 + d_flood_8 + d_flood_9 + d_flood_10 + d_flood_11 +  + d_flood_12 + QuarterChar + dCPI_0 + dCPI_1 + dCPI_2 + dCPI_3 + dCPI_4 + dCPI_5 + dCPI_6 + dCPI_7 + dCPI_8 + dCPI_9 + dCPI_10 + dCPI_11 + dCPI_12| CountyState")  
+
+
+
+  
+emp_glm <- felm(formula = f1,
+                    data = pdatanew,
+                weights = pdatanew$pop)
+
+emp_coefs <- summary(emp_glm)$coefficients
+rownames(emp_coefs) <- gsub("summer", "tropical",rownames(summary(emp_glm)$coefficients))
+
+emp_coefs %>% as.data.frame() %>% head(46) %>% round(4) %>% kbl() %>% kable_classic_2(full_width = F) %>% save_kable("F:/Honours/Writeup V2/Graphs/Emp1.2.png")
+emp_coefs %>% as.data.frame() %>%  tail(46) %>% round(4) %>% kbl() %>% kable_classic_2(full_width = F) %>% save_kable("F:/Honours/Writeup V2/Graphs/Emp2.2.png")
+```
+
+### hpi felm
+```{r}
+#f1 <- as.formula("e_hpi_dlog_0 ~ e_emp_dlog_1 + e_emp_dlog_2 + e_emp_dlog_3 + e_emp_dlog_4 + e_emp_dlog_5 + e_emp_dlog_6 + e_emp_dlog_7 + e_emp_dlog_8 + e_emp_dlog_9 + e_emp_dlog_10 + e_emp_dlog_11 + e_emp_dlog_12 + e_hpi_dlog_1 + e_hpi_dlog_2 + e_hpi_dlog_3 + e_hpi_dlog_4 + e_hpi_dlog_5 + e_hpi_dlog_6 + e_hpi_dlog_7 + e_hpi_dlog_8 + e_hpi_dlog_9 + e_hpi_dlog_10 + e_hpi_dlog_11 + e_hpi_dlog_12 + d_storm_winter_0 + d_storm_winter_1 + d_storm_winter_2 + d_storm_winter_3 + d_storm_winter_4 + d_storm_winter_5 + d_storm_winter_6 + d_storm_winter_7 + d_storm_winter_8 + d_storm_winter_9 + d_storm_winter_10 + d_storm_winter_11 + d_storm_winter_12 + d_storm_summer_0 + d_storm_summer_1 + d_storm_summer_2 + d_storm_summer_3 + d_storm_summer_4 + d_storm_summer_5 + d_storm_summer_6 + d_storm_summer_7 + d_storm_summer_8 + d_storm_summer_9 + d_storm_summer_10 + d_storm_summer_11 + d_storm_summer_12 + d_fire_0 + d_fire_1 + d_fire_2 + d_fire_3 + d_fire_4 + d_fire_5 + d_fire_6 + d_fire_7 + d_fire_8 + d_fire_9 + d_fire_10 + d_fire_11 + d_fire_12 + d_flood_0 + d_flood_1 + d_flood_2 + d_flood_3 + d_flood_4 + d_flood_5 + d_flood_6 + d_flood_7 + d_flood_8 + d_flood_9 + d_flood_10 + d_flood_11 +  + d_flood_12 + QuarterChar + FFR_0 + FFR_1 + FFR_2 + FFR_3 + FFR_4 + FFR_5 + FFR_6 + FFR_7 + FFR_8 + FFR_9 + FFR_10 + FFR_11 + FFR_12| CountyState")  
+
+#f1 <- as.formula("e_hpi_dlog_0 ~ e_emp_dlog_1 + e_emp_dlog_2 + e_emp_dlog_3 + e_emp_dlog_4 + e_emp_dlog_5 + e_emp_dlog_6 + e_emp_dlog_7 + e_emp_dlog_8 + e_emp_dlog_9 + e_emp_dlog_10 + e_emp_dlog_11 + e_emp_dlog_12 + e_hpi_dlog_1 + e_hpi_dlog_2 + e_hpi_dlog_3 + e_hpi_dlog_4 + e_hpi_dlog_5 + e_hpi_dlog_6 + e_hpi_dlog_7 + e_hpi_dlog_8 + e_hpi_dlog_9 + e_hpi_dlog_10 + e_hpi_dlog_11 + e_hpi_dlog_12 + d_storm_winter_0 + d_storm_winter_1 + d_storm_winter_2 + d_storm_winter_3 + d_storm_winter_4 + d_storm_winter_5 + d_storm_winter_6 + d_storm_winter_7 + d_storm_winter_8 + d_storm_winter_9 + d_storm_winter_10 + d_storm_winter_11 + d_storm_winter_12 + d_storm_summer_0 + d_storm_summer_1 + d_storm_summer_2 + d_storm_summer_3 + d_storm_summer_4 + d_storm_summer_5 + d_storm_summer_6 + d_storm_summer_7 + d_storm_summer_8 + d_storm_summer_9 + d_storm_summer_10 + d_storm_summer_11 + d_storm_summer_12 + d_fire_0 + d_fire_1 + d_fire_2 + d_fire_3 + d_fire_4 + d_fire_5 + d_fire_6 + d_fire_7 + d_fire_8 + d_fire_9 + d_fire_10 + d_fire_11 + d_fire_12 + d_flood_0 + d_flood_1 + d_flood_2 + d_flood_3 + d_flood_4 + d_flood_5 + d_flood_6 + d_flood_7 + d_flood_8 + d_flood_9 + d_flood_10 + d_flood_11 +  + d_flood_12 + QuarterChar + dlog_GDP_0 + dlog_GDP_1 + dlog_GDP_2 + dlog_GDP_3 + dlog_GDP_4 + dlog_GDP_5 + dlog_GDP_6 + dlog_GDP_7 + dlog_GDP_8 + dlog_GDP_9 + dlog_GDP_10 + dlog_GDP_11 + dlog_GDP_12| CountyState")  http://127.0.0.1:36211/graphics/plot_zoom_png?width=1189&height=1164
+
+f1 <- as.formula("e_hpi_dlog_0 ~ e_emp_dlog_1 + e_emp_dlog_2 + e_emp_dlog_3 + e_emp_dlog_4 + e_emp_dlog_5 + e_emp_dlog_6 + e_emp_dlog_7 + e_emp_dlog_8 + e_emp_dlog_9 + e_emp_dlog_10 + e_emp_dlog_11 + e_emp_dlog_12 + e_hpi_dlog_1 + e_hpi_dlog_2 + e_hpi_dlog_3 + e_hpi_dlog_4 + e_hpi_dlog_5 + e_hpi_dlog_6 + e_hpi_dlog_7 + e_hpi_dlog_8 + e_hpi_dlog_9 + e_hpi_dlog_10 + e_hpi_dlog_11 + e_hpi_dlog_12 + d_storm_winter_0 + d_storm_winter_1 + d_storm_winter_2 + d_storm_winter_3 + d_storm_winter_4 + d_storm_winter_5 + d_storm_winter_6 + d_storm_winter_7 + d_storm_winter_8 + d_storm_winter_9 + d_storm_winter_10 + d_storm_winter_11 + d_storm_winter_12 + d_storm_summer_0 + d_storm_summer_1 + d_storm_summer_2 + d_storm_summer_3 + d_storm_summer_4 + d_storm_summer_5 + d_storm_summer_6 + d_storm_summer_7 + d_storm_summer_8 + d_storm_summer_9 + d_storm_summer_10 + d_storm_summer_11 + d_storm_summer_12 + d_fire_0 + d_fire_1 + d_fire_2 + d_fire_3 + d_fire_4 + d_fire_5 + d_fire_6 + d_fire_7 + d_fire_8 + d_fire_9 + d_fire_10 + d_fire_11 + d_fire_12 + d_flood_0 + d_flood_1 + d_flood_2 + d_flood_3 + d_flood_4 + d_flood_5 + d_flood_6 + d_flood_7 + d_flood_8 + d_flood_9 + d_flood_10 + d_flood_11 +  + d_flood_12 + QuarterChar + dCPI_0 + dCPI_1 + dCPI_2 + dCPI_3 + dCPI_4 + dCPI_5 + dCPI_6 + dCPI_7 + dCPI_8 + dCPI_9 + dCPI_10 + dCPI_11 + dCPI_12| CountyState")  
+
+
+  
+hpi_glm <- felm(formula = f1,
+                    data = pdatanew,
+               weights = pdatanew$pop)
+hpi_glm %>% summary()
+
+hpi_coefs <- summary(hpi_glm)$coefficients
+rownames(hpi_coefs) <- gsub("summer", "tropical",rownames(summary(hpi_glm)$coefficients))
+
+hpi_coefs %>% as.data.frame() %>% head(46) %>% round(4) %>% kbl() %>% kable_classic_2(full_width = F) %>% save_kable("F:/Honours/Writeup V2/Graphs/HPI1.2.png")
+hpi_coefs %>% as.data.frame() %>%  tail(46) %>% round(4) %>% kbl() %>% kable_classic_2(full_width = F) %>% save_kable("F:/Honours/Writeup V2/Graphs/HPI2.2.png")
+```
+
+
+
+
+# CHOOSE DISASTER
+```{r}
+#Scenario <- "Winter Storm"
+#Scenario <- "Tropical Storm"
+#Scenario <- "Fire"
+Scenario <- "Flood"
+```
+
+  
+# Calculate IRF VAR
+```{r}
+########################
+# y1 = unemployment
+# y2 = employment
+# y3 = house prices
+########################
+
+# Bring in Coefficients
+alpha1 <- rep(0,12)
+alpha2 <- rep(0,12)
+alpha3 <- rep(0,12)
+
+beta1 <- rep(0,12)
+beta2 <- emp_glm$beta[1:12]
+beta3 <- hpi_glm$beta[1:12]
+
+gammma1 <- rep(0,13)
+gammma2 <- emp_glm$beta[13:24]
+gammma3 <- hpi_glm$beta[13:24]
+
+s_winter1 <- rep(0,13)
+s_winter2 <- emp_glm$beta[25:37]
+s_winter3 <- hpi_glm$beta[25:37]
+
+s_summer1 <- rep(0,13)
+s_summer2 <- emp_glm$beta[38:50]
+s_summer3 <- hpi_glm$beta[38:50]
+
+
+fire1 <- rep(0,13)
+fire2 <- emp_glm$beta[51:63]
+fire3 <- hpi_glm$beta[51:63]
+
+flood1 <- rep(0,13)
+flood2 <- emp_glm$beta[64:76]
+flood3 <- hpi_glm$beta[64:76]
+
+# Assign ND 
+if(Scenario == "Winter Storm"){
+  chosend1 <- s_winter1
+  chosend2 <- s_winter2
+  chosend3 <- s_winter3
+} else if(Scenario == "Tropical Storm"){
+  chosend1 <- s_summer1
+  chosend2 <- s_summer2
+  chosend3 <- s_summer3
+} else if(Scenario == "Fire"){
+  chosend1 <- fire1
+  chosend2 <- fire2
+  chosend3 <- fire3
+} else {
+  chosend1 <- flood1
+  chosend2 <- flood2
+  chosend3 <- flood3
+}
+
+
+# IRF t = 0
+D_y_1_t <- chosend1[1]
+D_y_2_t <- chosend2[1]
+D_y_3_t <- chosend3[1]
+
+
+#IRF t = 1
+D_y_1_t1 <- chosend1[2] + alpha1[1]*D_y_1_t + beta1[1]*D_y_2_t + gammma1[1]*D_y_3_t
+D_y_2_t1 <- chosend2[2] + alpha2[1]*D_y_1_t + beta2[1]*D_y_2_t + gammma2[1]*D_y_3_t
+D_y_3_t1 <- chosend3[2] + alpha3[1]*D_y_1_t + beta3[1]*D_y_2_t + gammma3[1]*D_y_3_t
+
+#IRF t = 2
+D_y_1_t2 <- chosend1[3] + alpha1[1]*D_y_1_t1 + alpha1[2]*D_y_1_t + beta1[1]*D_y_2_t1 + beta1[2]*D_y_2_t + gammma1[1]*D_y_3_t1 + gammma1[2]*D_y_3_t
+D_y_2_t2 <- chosend2[3] + alpha2[1]*D_y_1_t1 + alpha2[2]*D_y_1_t + beta2[1]*D_y_2_t1 + beta2[2]*D_y_2_t + gammma2[1]*D_y_3_t1 + gammma2[2]*D_y_3_t
+D_y_3_t2 <- chosend3[3] + alpha3[1]*D_y_1_t1 + alpha3[2]*D_y_1_t + beta3[1]*D_y_2_t1 + beta3[2]*D_y_2_t + gammma3[1]*D_y_3_t1 + gammma3[2]*D_y_3_t
+
+#IRF t = 3
+D_y_1_t3 <- chosend1[4] + alpha1[1]*D_y_1_t2 + alpha1[2]*D_y_1_t1 + alpha1[3]*D_y_1_t + beta1[1]*D_y_2_t2 + beta1[2]*D_y_2_t1 + beta1[3]*D_y_2_t + gammma1[1]*D_y_3_t2 + gammma1[2]*D_y_3_t1 + gammma1[3]*D_y_3_t
+D_y_2_t3 <- chosend2[4] + alpha2[1]*D_y_1_t2 + alpha2[2]*D_y_1_t1 + alpha2[3]*D_y_1_t + beta2[1]*D_y_2_t2 + beta2[2]*D_y_2_t1 + beta2[3]*D_y_2_t + gammma2[1]*D_y_3_t2 + gammma2[2]*D_y_3_t1 + gammma2[3]*D_y_3_t
+D_y_3_t3 <- chosend3[4] + alpha3[1]*D_y_1_t2 + alpha3[2]*D_y_1_t1 + alpha3[3]*D_y_1_t + beta3[1]*D_y_2_t2 + beta3[2]*D_y_2_t1 + beta3[3]*D_y_2_t + gammma3[1]*D_y_3_t2 + gammma3[2]*D_y_3_t1 + gammma3[3]*D_y_3_t
+
+
+#IRF t = 4
+D_y_1_t4 <- chosend1[5] + alpha1[1]*D_y_1_t3 + alpha1[2]*D_y_1_t2 + alpha1[3]*D_y_1_t1 + alpha1[4]*D_y_1_t + beta1[1]*D_y_2_t3 + beta1[2]*D_y_2_t2 + beta1[3]*D_y_2_t1 + beta1[4]*D_y_2_t + 
+            gammma1[1]*D_y_3_t3 + gammma1[2]*D_y_3_t2 + gammma1[3]*D_y_3_t1 + gammma1[4]*D_y_3_t
+D_y_2_t4 <- chosend2[5] + alpha2[1]*D_y_1_t3 + alpha2[2]*D_y_1_t2 + alpha2[3]*D_y_1_t1 + alpha2[4]*D_y_1_t + beta2[1]*D_y_2_t3 + beta2[2]*D_y_2_t2 + beta2[3]*D_y_2_t1 + beta2[4]*D_y_2_t + 
+            gammma2[1]*D_y_3_t3 + gammma2[2]*D_y_3_t2 + gammma2[3]*D_y_3_t1 + gammma2[4]*D_y_3_t
+D_y_3_t4 <- chosend3[5] + alpha3[1]*D_y_1_t3 + alpha3[2]*D_y_1_t2 + alpha3[3]*D_y_1_t1 + alpha3[4]*D_y_1_t + beta3[1]*D_y_2_t3 + beta3[2]*D_y_2_t2 + beta3[3]*D_y_2_t1 + beta3[4]*D_y_2_t + 
+            gammma3[1]*D_y_3_t3 + gammma3[2]*D_y_3_t2 + gammma3[3]*D_y_3_t1 + gammma3[4]*D_y_3_t
+
+#IRF t = 5
+D_y_1_t5 <- chosend1[6] + alpha1[1]*D_y_1_t4 + alpha1[2]*D_y_1_t3 + alpha1[3]*D_y_1_t2 + alpha1[4]*D_y_1_t1 + alpha1[5]*D_y_1_t + beta1[1]*D_y_2_t4 + beta1[2]*D_y_2_t3 + beta1[3]*D_y_2_t2 + beta1[4]*D_y_2_t1 + beta1[5]*D_y_2_t +
+            gammma1[1]*D_y_3_t4 + gammma1[2]*D_y_3_t3 + gammma1[3]*D_y_3_t2 + gammma1[4]*D_y_3_t1 + gammma1[5]*D_y_3_t
+D_y_2_t5 <- chosend2[6] + alpha2[1]*D_y_1_t4 + alpha2[2]*D_y_1_t3 + alpha2[3]*D_y_1_t2 + alpha2[4]*D_y_1_t1 + alpha2[5]*D_y_1_t + beta2[1]*D_y_2_t4 + beta2[2]*D_y_2_t3 + beta2[3]*D_y_2_t2 + beta2[4]*D_y_2_t1 + beta2[5]*D_y_2_t +
+            gammma2[1]*D_y_3_t4 + gammma2[2]*D_y_3_t3 + gammma2[3]*D_y_3_t2 + gammma2[4]*D_y_3_t1 + gammma2[5]*D_y_3_t
+D_y_3_t5 <- chosend3[6] + alpha3[1]*D_y_1_t4 + alpha3[2]*D_y_1_t3 + alpha3[3]*D_y_1_t2 + alpha3[4]*D_y_1_t1 + alpha3[5]*D_y_1_t + beta3[1]*D_y_2_t4 + beta3[2]*D_y_2_t3 + beta3[3]*D_y_2_t2 + beta3[4]*D_y_2_t1 + beta3[5]*D_y_2_t +
+            gammma3[1]*D_y_3_t4 + gammma3[2]*D_y_3_t3 + gammma3[3]*D_y_3_t2 + gammma3[4]*D_y_3_t1 + gammma3[5]*D_y_3_t
+
+#IRF t = 6
+D_y_1_t6 <- chosend1[7] + alpha1[1]*D_y_1_t5 + alpha1[2]*D_y_1_t4 + alpha1[3]*D_y_1_t3 + alpha1[4]*D_y_1_t2 + alpha1[5]*D_y_1_t1 + alpha1[6]*D_y_1_t + 
+                          beta1[1]*D_y_2_t5 + beta1[2]*D_y_2_t4 + beta1[3]*D_y_2_t3 + beta1[4]*D_y_2_t2 + beta1[5]*D_y_2_t1 + beta1[6]*D_y_2_t +
+                          gammma1[1]*D_y_3_t5 + gammma1[2]*D_y_3_t4 + gammma1[3]*D_y_3_t3 + gammma1[4]*D_y_3_t2 + gammma1[5]*D_y_3_t1 + gammma1[6]*D_y_3_t
+
+D_y_2_t6 <- chosend2[7] + alpha2[1]*D_y_1_t5 + alpha2[2]*D_y_1_t4 + alpha2[3]*D_y_1_t3 + alpha2[4]*D_y_1_t2 + alpha2[5]*D_y_1_t1 + alpha2[6]*D_y_1_t + 
+                          beta2[1]*D_y_2_t5 + beta2[2]*D_y_2_t4 + beta2[3]*D_y_2_t3 + beta2[4]*D_y_2_t2 + beta2[5]*D_y_2_t1 + beta2[6]*D_y_2_t +
+                          gammma2[1]*D_y_3_t5 + gammma2[2]*D_y_3_t4 + gammma2[3]*D_y_3_t3 + gammma2[4]*D_y_3_t2 + gammma2[5]*D_y_3_t1 + gammma2[6]*D_y_3_t
+
+D_y_3_t6 <- chosend3[7] + alpha3[1]*D_y_1_t5 + alpha3[2]*D_y_1_t4 + alpha3[3]*D_y_1_t3 + alpha3[4]*D_y_1_t2 + alpha3[5]*D_y_1_t1 + alpha3[6]*D_y_1_t + 
+                          beta3[1]*D_y_2_t5 + beta3[2]*D_y_2_t4 + beta3[3]*D_y_2_t3 + beta3[4]*D_y_2_t2 + beta3[5]*D_y_2_t1 + beta3[6]*D_y_2_t +
+                          gammma3[1]*D_y_3_t5 + gammma3[2]*D_y_3_t4 + gammma3[3]*D_y_3_t3 + gammma3[4]*D_y_3_t2 + gammma3[5]*D_y_3_t1 + gammma3[6]*D_y_3_t
+
+#IRF t = 7
+D_y_1_t7 <- chosend1[8] + alpha1[1]*D_y_1_t6 + alpha1[2]*D_y_1_t5 + alpha1[3]*D_y_1_t4 + alpha1[4]*D_y_1_t3 + alpha1[5]*D_y_1_t2 + alpha1[6]*D_y_1_t1 + alpha1[7]*D_y_1_t + 
+                          beta1[1]*D_y_2_t6 + beta1[2]*D_y_2_t5 + beta1[3]*D_y_2_t4 + beta1[4]*D_y_2_t3 + beta1[5]*D_y_2_t2 + beta1[6]*D_y_2_t1 + beta1[7]*D_y_2_t +
+                          gammma1[1]*D_y_3_t6 + gammma1[2]*D_y_3_t5 + gammma1[3]*D_y_3_t4 + gammma1[4]*D_y_3_t3 + gammma1[5]*D_y_3_t2 + gammma1[6]*D_y_3_t1 + gammma1[7]*D_y_3_t
+
+D_y_2_t7 <- chosend2[8] + alpha2[1]*D_y_1_t6 + alpha2[2]*D_y_1_t5 + alpha2[3]*D_y_1_t4 + alpha2[4]*D_y_1_t3 + alpha2[5]*D_y_1_t2 + alpha2[6]*D_y_1_t1 + alpha2[7]*D_y_1_t + 
+                          beta2[1]*D_y_2_t6 + beta2[2]*D_y_2_t5 + beta2[3]*D_y_2_t4 + beta2[4]*D_y_2_t3 + beta2[5]*D_y_2_t2 + beta2[6]*D_y_2_t1 + beta2[7]*D_y_2_t +
+                          gammma2[1]*D_y_3_t6 + gammma2[2]*D_y_3_t5 + gammma2[3]*D_y_3_t4 + gammma2[4]*D_y_3_t3 + gammma2[5]*D_y_3_t2 + gammma2[6]*D_y_3_t1 + gammma2[7]*D_y_3_t
+
+D_y_3_t7 <- chosend3[8] + alpha3[1]*D_y_1_t6 + alpha3[2]*D_y_1_t5 + alpha3[3]*D_y_1_t4 + alpha3[4]*D_y_1_t3 + alpha3[5]*D_y_1_t2 + alpha3[6]*D_y_1_t1 + alpha3[7]*D_y_1_t + 
+                          beta3[1]*D_y_2_t6 + beta3[2]*D_y_2_t5 + beta3[3]*D_y_2_t4 + beta3[4]*D_y_2_t3 + beta3[5]*D_y_2_t2 + beta3[6]*D_y_2_t1 + beta3[7]*D_y_2_t +
+                          gammma3[1]*D_y_3_t6 + gammma3[2]*D_y_3_t5 + gammma3[3]*D_y_3_t4 + gammma3[4]*D_y_3_t3 + gammma3[5]*D_y_3_t2 + gammma3[6]*D_y_3_t1 + gammma3[7]*D_y_3_t
+
+
+#IRF t = 8
+D_y_1_t8 <- chosend1[9] + alpha1[1]*D_y_1_t7 + alpha1[2]*D_y_1_t6 + alpha1[3]*D_y_1_t5 + alpha1[4]*D_y_1_t4 + alpha1[5]*D_y_1_t3 + alpha1[6]*D_y_1_t2 + alpha1[7]*D_y_1_t1 + alpha1[8]*D_y_1_t + 
+                          beta1[1]*D_y_2_t7 + beta1[2]*D_y_2_t6 + beta1[3]*D_y_2_t5 + beta1[4]*D_y_2_t4 + beta1[5]*D_y_2_t3 + beta1[6]*D_y_2_t2 + beta1[7]*D_y_2_t1 + beta1[8]*D_y_2_t +
+                          gammma1[1]*D_y_3_t7 + gammma1[2]*D_y_3_t6 + gammma1[3]*D_y_3_t5 + gammma1[4]*D_y_3_t4 + gammma1[5]*D_y_3_t3 + gammma1[6]*D_y_3_t2 + gammma1[7]*D_y_3_t1 + gammma1[8]*D_y_3_t
+
+D_y_2_t8 <- chosend2[9] + alpha2[1]*D_y_1_t7 + alpha2[2]*D_y_1_t6 + alpha2[3]*D_y_1_t5 + alpha2[4]*D_y_1_t4 + alpha2[5]*D_y_1_t3 + alpha2[6]*D_y_1_t2 + alpha2[7]*D_y_1_t1 + alpha2[8]*D_y_1_t + 
+                          beta2[1]*D_y_2_t7 + beta2[2]*D_y_2_t6 + beta2[3]*D_y_2_t5 + beta2[4]*D_y_2_t4 + beta2[5]*D_y_2_t3 + beta2[6]*D_y_2_t2 + beta2[7]*D_y_2_t1 + beta2[8]*D_y_2_t +
+                          gammma2[1]*D_y_3_t7 + gammma2[2]*D_y_3_t6 + gammma2[3]*D_y_3_t5 + gammma2[4]*D_y_3_t4 + gammma2[5]*D_y_3_t3 + gammma2[6]*D_y_3_t2 + gammma2[7]*D_y_3_t1 + gammma2[8]*D_y_3_t
+
+D_y_3_t8 <- chosend3[9] + alpha3[1]*D_y_1_t7 + alpha3[2]*D_y_1_t6 + alpha3[3]*D_y_1_t5 + alpha3[4]*D_y_1_t4 + alpha3[5]*D_y_1_t3 + alpha3[6]*D_y_1_t2 + alpha3[7]*D_y_1_t1 + alpha3[8]*D_y_1_t + 
+                          beta3[1]*D_y_2_t7 + beta3[2]*D_y_2_t6 + beta3[3]*D_y_2_t5 + beta3[4]*D_y_2_t4 + beta3[5]*D_y_2_t3 + beta3[6]*D_y_2_t2 + beta3[7]*D_y_2_t1 + beta3[8]*D_y_2_t +
+                          gammma3[1]*D_y_3_t7 + gammma3[2]*D_y_3_t6 + gammma3[3]*D_y_3_t5 + gammma3[4]*D_y_3_t4 + gammma3[5]*D_y_3_t3 + gammma3[6]*D_y_3_t2 + gammma3[7]*D_y_3_t1 + gammma3[8]*D_y_3_t
+
+#IRF t = 9
+D_y_1_t9 <- chosend1[10] + alpha1[1]*D_y_1_t8 + alpha1[2]*D_y_1_t7 + alpha1[3]*D_y_1_t6 + alpha1[4]*D_y_1_t5 + alpha1[5]*D_y_1_t4 + alpha1[6]*D_y_1_t3 + alpha1[7]*D_y_1_t2 + alpha1[8]*D_y_1_t1 + alpha1[9]*D_y_1_t + 
+                          beta1[1]*D_y_2_t8 + beta1[2]*D_y_2_t7 + beta1[3]*D_y_2_t6 + beta1[4]*D_y_2_t5 + beta1[5]*D_y_2_t4 + beta1[6]*D_y_2_t3 + beta1[7]*D_y_2_t2 + beta1[8]*D_y_2_t1 + beta1[9]*D_y_2_t +
+                          gammma1[1]*D_y_3_t8 + gammma1[2]*D_y_3_t7 + gammma1[3]*D_y_3_t6 + gammma1[4]*D_y_3_t5 + gammma1[5]*D_y_3_t4 + gammma1[6]*D_y_3_t3 + gammma1[7]*D_y_3_t2 + gammma1[8]*D_y_3_t1 + gammma1[9]*D_y_3_t 
+
+D_y_2_t9 <- chosend2[10] + alpha2[1]*D_y_1_t8 + alpha2[2]*D_y_1_t7 + alpha2[3]*D_y_1_t6 + alpha2[4]*D_y_1_t5 + alpha2[5]*D_y_1_t4 + alpha2[6]*D_y_1_t3 + alpha2[7]*D_y_1_t2 + alpha2[8]*D_y_1_t1 + alpha2[9]*D_y_1_t + 
+                          beta2[1]*D_y_2_t8 + beta2[2]*D_y_2_t7 + beta2[3]*D_y_2_t6 + beta2[4]*D_y_2_t5 + beta2[5]*D_y_2_t4 + beta2[6]*D_y_2_t3 + beta2[7]*D_y_2_t2 + beta2[8]*D_y_2_t1 + beta2[9]*D_y_2_t +
+                          gammma2[1]*D_y_3_t8 + gammma2[2]*D_y_3_t7 + gammma2[3]*D_y_3_t6 + gammma2[4]*D_y_3_t5 + gammma2[5]*D_y_3_t4 + gammma2[6]*D_y_3_t3 + gammma2[7]*D_y_3_t2 + gammma2[8]*D_y_3_t1 + gammma2[9]*D_y_3_t 
+
+D_y_3_t9 <- chosend3[10] + alpha3[1]*D_y_1_t8 + alpha3[2]*D_y_1_t7 + alpha3[3]*D_y_1_t6 + alpha3[4]*D_y_1_t5 + alpha3[5]*D_y_1_t4 + alpha3[6]*D_y_1_t3 + alpha3[7]*D_y_1_t2 + alpha3[8]*D_y_1_t1 + alpha3[9]*D_y_1_t + 
+                          beta3[1]*D_y_2_t8 + beta3[2]*D_y_2_t7 + beta3[3]*D_y_2_t6 + beta3[4]*D_y_2_t5 + beta3[5]*D_y_2_t4 + beta3[6]*D_y_2_t3 + beta3[7]*D_y_2_t2 + beta3[8]*D_y_2_t1 + beta3[9]*D_y_2_t +
+                          gammma3[1]*D_y_3_t8 + gammma3[2]*D_y_3_t7 + gammma3[3]*D_y_3_t6 + gammma3[4]*D_y_3_t5 + gammma3[5]*D_y_3_t4 + gammma3[6]*D_y_3_t3 + gammma3[7]*D_y_3_t2 + gammma3[8]*D_y_3_t1 + gammma3[9]*D_y_3_t 
+
+
+#IRF t = 10
+D_y_1_t10 <- chosend1[11] + alpha1[1]*D_y_1_t9 + alpha1[2]*D_y_1_t8 + alpha1[3]*D_y_1_t7 + alpha1[4]*D_y_1_t6 + alpha1[5]*D_y_1_t5 + alpha1[6]*D_y_1_t4 + alpha1[7]*D_y_1_t3 + alpha1[8]*D_y_1_t2 + alpha1[9]*D_y_1_t1 +
+                            alpha1[10]*D_y_1_t + 
+                            beta1[1]*D_y_2_t9 + beta1[2]*D_y_2_t8 + beta1[3]*D_y_2_t7 + beta1[4]*D_y_2_t6 + beta1[5]*D_y_2_t5 + beta1[6]*D_y_2_t4 + beta1[7]*D_y_2_t3 + beta1[8]*D_y_2_t2 + beta1[9]*D_y_2_t1 +
+                            beta1[10]*D_y_2_t + 
+                            gammma1[1]*D_y_3_t9 + gammma1[2]*D_y_3_t8 + gammma1[3]*D_y_3_t7 + gammma1[4]*D_y_3_t6 + gammma1[5]*D_y_3_t5 + gammma1[6]*D_y_3_t4 + gammma1[7]*D_y_3_t3 + gammma1[8]*D_y_3_t2 + gammma1[9]*D_y_3_t1 + 
+                            gammma1[10]*D_y_3_t
+
+D_y_2_t10 <- chosend2[11] + alpha2[1]*D_y_1_t9 + alpha2[2]*D_y_1_t8 + alpha2[3]*D_y_1_t7 + alpha2[4]*D_y_1_t6 + alpha2[5]*D_y_1_t5 + alpha2[6]*D_y_1_t4 + alpha2[7]*D_y_1_t3 + alpha2[8]*D_y_1_t2 + alpha2[9]*D_y_1_t1 +
+                            alpha2[10]*D_y_1_t + 
+                            beta2[1]*D_y_2_t9 + beta2[2]*D_y_2_t8 + beta2[3]*D_y_2_t7 + beta2[4]*D_y_2_t6 + beta2[5]*D_y_2_t5 + beta2[6]*D_y_2_t4 + beta2[7]*D_y_2_t3 + beta2[8]*D_y_2_t2 + beta2[9]*D_y_2_t1 +
+                            beta2[10]*D_y_2_t + 
+                            gammma2[1]*D_y_3_t9 + gammma2[2]*D_y_3_t8 + gammma2[3]*D_y_3_t7 + gammma2[4]*D_y_3_t6 + gammma2[5]*D_y_3_t5 + gammma2[6]*D_y_3_t4 + gammma2[7]*D_y_3_t3 + gammma2[8]*D_y_3_t2 + gammma2[9]*D_y_3_t1 + 
+                            gammma2[10]*D_y_3_t
+
+D_y_3_t10 <- chosend3[11] + alpha3[1]*D_y_1_t9 + alpha3[2]*D_y_1_t8 + alpha3[3]*D_y_1_t7 + alpha3[4]*D_y_1_t6 + alpha3[5]*D_y_1_t5 + alpha3[6]*D_y_1_t4 + alpha3[7]*D_y_1_t3 + alpha3[8]*D_y_1_t2 + alpha3[9]*D_y_1_t1 +
+                            alpha3[10]*D_y_1_t + 
+                            beta3[1]*D_y_2_t9 + beta3[2]*D_y_2_t8 + beta3[3]*D_y_2_t7 + beta3[4]*D_y_2_t6 + beta3[5]*D_y_2_t5 + beta3[6]*D_y_2_t4 + beta3[7]*D_y_2_t3 + beta3[8]*D_y_2_t2 + beta3[9]*D_y_2_t1 +
+                            beta3[10]*D_y_2_t + 
+                            gammma3[1]*D_y_3_t9 + gammma3[2]*D_y_3_t8 + gammma3[3]*D_y_3_t7 + gammma3[4]*D_y_3_t6 + gammma3[5]*D_y_3_t5 + gammma3[6]*D_y_3_t4 + gammma3[7]*D_y_3_t3 + gammma3[8]*D_y_3_t2 + gammma3[9]*D_y_3_t1 + 
+                            gammma3[10]*D_y_3_t
+
+#IRF t = 11
+D_y_1_t11 <- chosend1[12] + alpha1[1]*D_y_1_t10 + alpha1[2]*D_y_1_t9 + alpha1[3]*D_y_1_t8 + alpha1[4]*D_y_1_t7 + alpha1[5]*D_y_1_t6 + alpha1[6]*D_y_1_t5 + alpha1[7]*D_y_1_t4 + alpha1[8]*D_y_1_t3 + alpha1[9]*D_y_1_t2 +
+                            alpha1[10]*D_y_1_t1 + alpha1[11]*D_y_1_t +
+                            beta1[1]*D_y_2_t10 + beta1[2]*D_y_2_t9 + beta1[3]*D_y_2_t8 + beta1[4]*D_y_2_t7 + beta1[5]*D_y_2_t6 + beta1[6]*D_y_2_t5 + beta1[7]*D_y_2_t4 + beta1[8]*D_y_2_t3 + beta1[9]*D_y_2_t2 +
+                            beta1[10]*D_y_2_t1 + beta1[11]*D_y_2_t + 
+                            gammma1[1]*D_y_3_t10 + gammma1[2]*D_y_3_t9 + gammma1[3]*D_y_3_t8 + gammma1[4]*D_y_3_t7 + gammma1[5]*D_y_3_t6 + gammma1[6]*D_y_3_t5 + gammma1[7]*D_y_3_t4 + gammma1[8]*D_y_3_t3 + gammma1[9]*D_y_3_t2 + 
+                            gammma1[10]*D_y_3_t1 + gammma1[11]*D_y_3_t
+
+D_y_2_t11 <- chosend2[12] + alpha2[1]*D_y_1_t10 + alpha2[2]*D_y_1_t9 + alpha2[3]*D_y_1_t8 + alpha2[4]*D_y_1_t7 + alpha2[5]*D_y_1_t6 + alpha2[6]*D_y_1_t5 + alpha2[7]*D_y_1_t4 + alpha2[8]*D_y_1_t3 + alpha2[9]*D_y_1_t2 +
+                            alpha2[10]*D_y_1_t1 + alpha2[11]*D_y_1_t +
+                            beta2[1]*D_y_2_t10 + beta2[2]*D_y_2_t9 + beta2[3]*D_y_2_t8 + beta2[4]*D_y_2_t7 + beta2[5]*D_y_2_t6 + beta2[6]*D_y_2_t5 + beta2[7]*D_y_2_t4 + beta2[8]*D_y_2_t3 + beta2[9]*D_y_2_t2 +
+                            beta2[10]*D_y_2_t1 + beta2[11]*D_y_2_t + 
+                            gammma2[1]*D_y_3_t10 + gammma2[2]*D_y_3_t9 + gammma2[3]*D_y_3_t8 + gammma2[4]*D_y_3_t7 + gammma2[5]*D_y_3_t6 + gammma2[6]*D_y_3_t5 + gammma2[7]*D_y_3_t4 + gammma2[8]*D_y_3_t3 + gammma2[9]*D_y_3_t2 + 
+                            gammma2[10]*D_y_3_t1 + gammma2[11]*D_y_3_t
+
+D_y_3_t11 <- chosend3[12] + alpha3[1]*D_y_1_t10 + alpha3[2]*D_y_1_t9 + alpha3[3]*D_y_1_t8 + alpha3[4]*D_y_1_t7 + alpha3[5]*D_y_1_t6 + alpha3[6]*D_y_1_t5 + alpha3[7]*D_y_1_t4 + alpha3[8]*D_y_1_t3 + alpha3[9]*D_y_1_t2 +
+                            alpha3[10]*D_y_1_t1 + alpha3[11]*D_y_1_t +
+                            beta3[1]*D_y_2_t10 + beta3[2]*D_y_2_t9 + beta3[3]*D_y_2_t8 + beta3[4]*D_y_2_t7 + beta3[5]*D_y_2_t6 + beta3[6]*D_y_2_t5 + beta3[7]*D_y_2_t4 + beta3[8]*D_y_2_t3 + beta3[9]*D_y_2_t2 +
+                            beta3[10]*D_y_2_t1 + beta3[11]*D_y_2_t + 
+                            gammma3[1]*D_y_3_t10 + gammma3[2]*D_y_3_t9 + gammma3[3]*D_y_3_t8 + gammma3[4]*D_y_3_t7 + gammma3[5]*D_y_3_t6 + gammma3[6]*D_y_3_t5 + gammma3[7]*D_y_3_t4 + gammma3[8]*D_y_3_t3 + gammma3[9]*D_y_3_t2 + 
+                            gammma3[10]*D_y_3_t1 + gammma3[11]*D_y_3_t
+
+#IRF t = 12
+D_y_1_t12 <- chosend1[13] + alpha1[1]*D_y_1_t11 + alpha1[2]*D_y_1_t10 + alpha1[3]*D_y_1_t9 + alpha1[4]*D_y_1_t8 + alpha1[5]*D_y_1_t7 + alpha1[6]*D_y_1_t6 + alpha1[7]*D_y_1_t5 + alpha1[8]*D_y_1_t4 + alpha1[9]*D_y_1_t3 +
+                            alpha1[10]*D_y_1_t2 + alpha1[11]*D_y_1_t1 + alpha1[12]*D_y_1_t +
+                            beta1[1]*D_y_2_t11 + beta1[2]*D_y_2_t10 + beta1[3]*D_y_2_t9 + beta1[4]*D_y_2_t8 + beta1[5]*D_y_2_t7 + beta1[6]*D_y_2_t6+ beta1[7]*D_y_2_t5 + beta1[8]*D_y_2_t4 + beta1[9]*D_y_2_t3 +
+                            beta1[10]*D_y_2_t2 + beta1[11]*D_y_2_t1 + beta1[12]*D_y_2_t +
+                            gammma1[1]*D_y_3_t11 + gammma1[2]*D_y_3_t10 + gammma1[3]*D_y_3_t9 + gammma1[4]*D_y_3_t8 + gammma1[5]*D_y_3_t7 + gammma1[6]*D_y_3_t6 + gammma1[7]*D_y_3_t5 + gammma1[8]*D_y_3_t4 + gammma1[9]*D_y_3_t3 + 
+                            gammma1[10]*D_y_3_t2 + gammma1[11]*D_y_3_t1 + gammma1[12]*D_y_3_t
+
+D_y_2_t12 <- chosend2[13] + alpha2[1]*D_y_1_t11 + alpha2[2]*D_y_1_t10 + alpha2[3]*D_y_1_t9 + alpha2[4]*D_y_1_t8 + alpha2[5]*D_y_1_t7 + alpha2[6]*D_y_1_t6 + alpha2[7]*D_y_1_t5 + alpha2[8]*D_y_1_t4 + alpha2[9]*D_y_1_t3 +
+                            alpha2[10]*D_y_1_t2 + alpha2[11]*D_y_1_t1 + alpha2[12]*D_y_1_t +
+                            beta2[1]*D_y_2_t11 + beta2[2]*D_y_2_t10 + beta2[3]*D_y_2_t9 + beta2[4]*D_y_2_t8 + beta2[5]*D_y_2_t7 + beta2[6]*D_y_2_t6+ beta2[7]*D_y_2_t5 + beta2[8]*D_y_2_t4 + beta2[9]*D_y_2_t3 +
+                            beta2[10]*D_y_2_t2 + beta2[11]*D_y_2_t1 + beta2[12]*D_y_2_t +
+                            gammma2[1]*D_y_3_t11 + gammma2[2]*D_y_3_t10 + gammma2[3]*D_y_3_t9 + gammma2[4]*D_y_3_t8 + gammma2[5]*D_y_3_t7 + gammma2[6]*D_y_3_t6 + gammma2[7]*D_y_3_t5 + gammma2[8]*D_y_3_t4 + gammma2[9]*D_y_3_t3 + 
+                            gammma2[10]*D_y_3_t2 + gammma2[11]*D_y_3_t1 + gammma2[12]*D_y_3_t
+
+D_y_3_t12 <- chosend3[13] + alpha3[1]*D_y_1_t11 + alpha3[2]*D_y_1_t10 + alpha3[3]*D_y_1_t9 + alpha3[4]*D_y_1_t8 + alpha3[5]*D_y_1_t7 + alpha3[6]*D_y_1_t6 + alpha3[7]*D_y_1_t5 + alpha3[8]*D_y_1_t4 + alpha3[9]*D_y_1_t3 +
+                            alpha3[10]*D_y_1_t2 + alpha3[11]*D_y_1_t1 + alpha3[12]*D_y_1_t +
+                            beta3[1]*D_y_2_t11 + beta3[2]*D_y_2_t10 + beta3[3]*D_y_2_t9 + beta3[4]*D_y_2_t8 + beta3[5]*D_y_2_t7 + beta3[6]*D_y_2_t6+ beta3[7]*D_y_2_t5 + beta3[8]*D_y_2_t4 + beta3[9]*D_y_2_t3 +
+                            beta3[10]*D_y_2_t2 + beta3[11]*D_y_2_t1 + beta3[12]*D_y_2_t +
+                            gammma3[1]*D_y_3_t11 + gammma3[2]*D_y_3_t10 + gammma3[3]*D_y_3_t9 + gammma3[4]*D_y_3_t8 + gammma3[5]*D_y_3_t7 + gammma3[6]*D_y_3_t6 + gammma3[7]*D_y_3_t5 + gammma3[8]*D_y_3_t4 + gammma3[9]*D_y_3_t3 + 
+                            gammma3[10]*D_y_3_t2 + gammma3[11]*D_y_3_t1 + gammma3[12]*D_y_3_t
+
+#IRF t = 13
+D_y_1_t13 <-      alpha1[1]*D_y_1_t12 + alpha1[2]*D_y_1_t11 + alpha1[3]*D_y_1_t10 + alpha1[4]*D_y_1_t9 + alpha1[5]*D_y_1_t8 + alpha1[6]*D_y_1_t7 + alpha1[7]*D_y_1_t6 + alpha1[8]*D_y_1_t5 + alpha1[9]*D_y_1_t4 +
+                  alpha1[10]*D_y_1_t3 + alpha1[11]*D_y_1_t2 + alpha1[12]*D_y_1_t1 +
+                  beta1[1]*D_y_2_t12 + beta1[2]*D_y_2_t11 + beta1[3]*D_y_2_t10 + beta1[4]*D_y_2_t9 + beta1[5]*D_y_2_t8 + beta1[6]*D_y_2_t7+ beta1[7]*D_y_2_t6 + beta1[8]*D_y_2_t5 + beta1[9]*D_y_2_t4 +
+                  beta1[10]*D_y_2_t3 + beta1[11]*D_y_2_t2 + beta1[12]*D_y_2_t1 +
+                  gammma1[1]*D_y_3_t12 + gammma1[2]*D_y_3_t11 + gammma1[3]*D_y_3_t10 + gammma1[4]*D_y_3_t9 + gammma1[5]*D_y_3_t8 + gammma1[6]*D_y_3_t7 + gammma1[7]*D_y_3_t6 + gammma1[8]*D_y_3_t5 + gammma1[9]*D_y_3_t4 + 
+                  gammma1[10]*D_y_3_t3 + gammma1[11]*D_y_3_t2 + gammma1[12]*D_y_3_t1
+                  
+D_y_2_t13 <-      alpha2[1]*D_y_1_t12 + alpha2[2]*D_y_1_t11 + alpha2[3]*D_y_1_t10 + alpha2[4]*D_y_1_t9 + alpha2[5]*D_y_1_t8 + alpha2[6]*D_y_1_t7 + alpha2[7]*D_y_1_t6 + alpha2[8]*D_y_1_t5 + alpha2[9]*D_y_1_t4 +
+                  alpha2[10]*D_y_1_t3 + alpha2[11]*D_y_1_t2 + alpha2[12]*D_y_1_t1 +
+                  beta2[1]*D_y_2_t12 + beta2[2]*D_y_2_t11 + beta2[3]*D_y_2_t10 + beta2[4]*D_y_2_t9 + beta2[5]*D_y_2_t8 + beta2[6]*D_y_2_t7+ beta2[7]*D_y_2_t6 + beta2[8]*D_y_2_t5 + beta2[9]*D_y_2_t4 +
+                  beta2[10]*D_y_2_t3 + beta2[11]*D_y_2_t2 + beta2[12]*D_y_2_t1 +
+                  gammma2[1]*D_y_3_t12 + gammma2[2]*D_y_3_t11 + gammma2[3]*D_y_3_t10 + gammma2[4]*D_y_3_t9 + gammma2[5]*D_y_3_t8 + gammma2[6]*D_y_3_t7 + gammma2[7]*D_y_3_t6 + gammma2[8]*D_y_3_t5 + gammma2[9]*D_y_3_t4 + 
+                  gammma2[10]*D_y_3_t3 + gammma2[11]*D_y_3_t2 + gammma2[12]*D_y_3_t1
+                  
+D_y_3_t13 <-      alpha3[1]*D_y_1_t12 + alpha3[2]*D_y_1_t11 + alpha3[3]*D_y_1_t10 + alpha3[4]*D_y_1_t9 + alpha3[5]*D_y_1_t8 + alpha3[6]*D_y_1_t7 + alpha3[7]*D_y_1_t6 + alpha3[8]*D_y_1_t5 + alpha3[9]*D_y_1_t4 +
+                  alpha3[10]*D_y_1_t3 + alpha3[11]*D_y_1_t2 + alpha3[12]*D_y_1_t1 +
+                  beta3[1]*D_y_2_t12 + beta3[2]*D_y_2_t11 + beta3[3]*D_y_2_t10 + beta3[4]*D_y_2_t9 + beta3[5]*D_y_2_t8 + beta3[6]*D_y_2_t7+ beta3[7]*D_y_2_t6 + beta3[8]*D_y_2_t5 + beta3[9]*D_y_2_t4 +
+                  beta3[10]*D_y_2_t3 + beta3[11]*D_y_2_t2 + beta3[12]*D_y_2_t1 +
+                  gammma3[1]*D_y_3_t12 + gammma3[2]*D_y_3_t11 + gammma3[3]*D_y_3_t10 + gammma3[4]*D_y_3_t9 + gammma3[5]*D_y_3_t8 + gammma3[6]*D_y_3_t7 + gammma3[7]*D_y_3_t6 + gammma3[8]*D_y_3_t5 + gammma3[9]*D_y_3_t4 + 
+                  gammma3[10]*D_y_3_t3 + gammma3[11]*D_y_3_t2 + gammma3[12]*D_y_3_t1                  
+
+                  
+#IRF t = 14
+D_y_1_t14 <-      alpha1[1]*D_y_1_t13 + alpha1[2]*D_y_1_t12 + alpha1[3]*D_y_1_t11 + alpha1[4]*D_y_1_t10 + alpha1[5]*D_y_1_t9 + alpha1[6]*D_y_1_t8 + alpha1[7]*D_y_1_t7 + alpha1[8]*D_y_1_t6 + alpha1[9]*D_y_1_t5 +
+                  alpha1[10]*D_y_1_t4 + alpha1[11]*D_y_1_t3 + alpha1[12]*D_y_1_t2 +
+                  beta1[1]*D_y_2_t13 + beta1[2]*D_y_2_t12 + beta1[3]*D_y_2_t11 + beta1[4]*D_y_2_t10 + beta1[5]*D_y_2_t9 + beta1[6]*D_y_2_t8+ beta1[7]*D_y_2_t7 + beta1[8]*D_y_2_t6 + beta1[9]*D_y_2_t5 +
+                  beta1[10]*D_y_2_t4 + beta1[11]*D_y_2_t3 + beta1[12]*D_y_2_t2 +
+                  gammma1[1]*D_y_3_t13 + gammma1[2]*D_y_3_t12 + gammma1[3]*D_y_3_t11 + gammma1[4]*D_y_3_t10+ gammma1[5]*D_y_3_t9 + gammma1[6]*D_y_3_t8 + gammma1[7]*D_y_3_t7 + gammma1[8]*D_y_3_t6 + gammma1[9]*D_y_3_t5 + 
+                  gammma1[10]*D_y_3_t4 + gammma1[11]*D_y_3_t3 + gammma1[12]*D_y_3_t2 
+                  
+D_y_2_t14 <-      alpha2[1]*D_y_1_t13 + alpha2[2]*D_y_1_t12 + alpha2[3]*D_y_1_t11 + alpha2[4]*D_y_1_t10 + alpha2[5]*D_y_1_t9 + alpha2[6]*D_y_1_t8 + alpha2[7]*D_y_1_t7 + alpha2[8]*D_y_1_t6 + alpha2[9]*D_y_1_t5 +
+                  alpha2[10]*D_y_1_t4 + alpha2[11]*D_y_1_t3 + alpha2[12]*D_y_1_t2 + 
+                  beta2[1]*D_y_2_t13 + beta2[2]*D_y_2_t12 + beta2[3]*D_y_2_t11 + beta2[4]*D_y_2_t10 + beta2[5]*D_y_2_t9 + beta2[6]*D_y_2_t8+ beta2[7]*D_y_2_t7 + beta2[8]*D_y_2_t6 + beta2[9]*D_y_2_t5 +
+                  beta2[10]*D_y_2_t4 + beta2[11]*D_y_2_t3 + beta2[12]*D_y_2_t2 +
+                  gammma2[1]*D_y_3_t13 + gammma2[2]*D_y_3_t12 + gammma2[3]*D_y_3_t11 + gammma2[4]*D_y_3_t10+ gammma2[5]*D_y_3_t9 + gammma2[6]*D_y_3_t8 + gammma2[7]*D_y_3_t7 + gammma2[8]*D_y_3_t6 + gammma2[9]*D_y_3_t5 + 
+                  gammma2[10]*D_y_3_t4 + gammma2[11]*D_y_3_t3 + gammma2[12]*D_y_3_t2     
+
+D_y_3_t14 <-      alpha3[1]*D_y_1_t13 + alpha3[2]*D_y_1_t12 + alpha3[3]*D_y_1_t11 + alpha3[4]*D_y_1_t10 + alpha3[5]*D_y_1_t9 + alpha3[6]*D_y_1_t8 + alpha3[7]*D_y_1_t7 + alpha3[8]*D_y_1_t6 + alpha3[9]*D_y_1_t5 +
+                  alpha3[10]*D_y_1_t4 + alpha3[11]*D_y_1_t3 + alpha3[12]*D_y_1_t2 +
+                  beta3[1]*D_y_2_t13 + beta3[2]*D_y_2_t12 + beta3[3]*D_y_2_t11 + beta3[4]*D_y_2_t10 + beta3[5]*D_y_2_t9 + beta3[6]*D_y_2_t8+ beta3[7]*D_y_2_t7 + beta3[8]*D_y_2_t6 + beta3[9]*D_y_2_t5 +
+                  beta3[10]*D_y_2_t4 + beta3[11]*D_y_2_t3 + beta3[12]*D_y_2_t2 +
+                  gammma3[1]*D_y_3_t13 + gammma3[2]*D_y_3_t12 + gammma3[3]*D_y_3_t11 + gammma3[4]*D_y_3_t10+ gammma3[5]*D_y_3_t9 + gammma3[6]*D_y_3_t8 + gammma3[7]*D_y_3_t7 + gammma3[8]*D_y_3_t6 + gammma3[9]*D_y_3_t5 + 
+                  gammma3[10]*D_y_3_t4 + gammma3[11]*D_y_3_t3 + gammma3[12]*D_y_3_t2
+
+#IRF t = 15
+D_y_1_t15 <-      alpha1[1]*D_y_1_t14 + alpha1[2]*D_y_1_t13 + alpha1[3]*D_y_1_t12 + alpha1[4]*D_y_1_t11 + alpha1[5]*D_y_1_t10 + alpha1[6]*D_y_1_t9 + alpha1[7]*D_y_1_t8 + alpha1[8]*D_y_1_t7 + alpha1[9]*D_y_1_t6 +
+                  alpha1[10]*D_y_1_t5 + alpha1[11]*D_y_1_t4 + alpha1[12]*D_y_1_t3 +
+                  beta1[1]*D_y_2_t14 + beta1[2]*D_y_2_t13 + beta1[3]*D_y_2_t12 + beta1[4]*D_y_2_t11 + beta1[5]*D_y_2_t10 + beta1[6]*D_y_2_t9 + beta1[7]*D_y_2_t8 + beta1[8]*D_y_2_t7 + beta1[9]*D_y_2_t6 +
+                  beta1[10]*D_y_2_t5 + beta1[11]*D_y_2_t4 + beta1[12]*D_y_2_t3 +
+                  gammma1[1]*D_y_3_t14 + gammma1[2]*D_y_3_t13 + gammma1[3]*D_y_3_t12 + gammma1[4]*D_y_3_t11+ gammma1[5]*D_y_3_t10 + gammma1[6]*D_y_3_t9 + gammma1[7]*D_y_3_t8 + gammma1[8]*D_y_3_t7 + gammma1[9]*D_y_3_t6 + 
+                  gammma1[10]*D_y_3_t5 + gammma1[11]*D_y_3_t4 + gammma1[12]*D_y_3_t3 
+
+D_y_2_t15 <-      alpha2[1]*D_y_1_t14 + alpha2[2]*D_y_1_t13 + alpha2[3]*D_y_1_t12 + alpha2[4]*D_y_1_t11 + alpha2[5]*D_y_1_t10 + alpha2[6]*D_y_1_t9 + alpha2[7]*D_y_1_t8 + alpha2[8]*D_y_1_t7 + alpha2[9]*D_y_1_t6 +
+                  alpha2[10]*D_y_1_t5 + alpha2[11]*D_y_1_t4 + alpha2[12]*D_y_1_t3 +
+                  beta2[1]*D_y_2_t14 + beta2[2]*D_y_2_t13 + beta2[3]*D_y_2_t12 + beta2[4]*D_y_2_t11 + beta2[5]*D_y_2_t10 + beta2[6]*D_y_2_t9 + beta2[7]*D_y_2_t8 + beta2[8]*D_y_2_t7 + beta2[9]*D_y_2_t6 +
+                  beta2[10]*D_y_2_t5 + beta2[11]*D_y_2_t4 + beta2[12]*D_y_2_t3 +
+                  gammma2[1]*D_y_3_t14 + gammma2[2]*D_y_3_t13 + gammma2[3]*D_y_3_t12 + gammma2[4]*D_y_3_t11+ gammma2[5]*D_y_3_t10 + gammma2[6]*D_y_3_t9 + gammma2[7]*D_y_3_t8 + gammma2[8]*D_y_3_t7 + gammma2[9]*D_y_3_t6 + 
+                  gammma2[10]*D_y_3_t5 + gammma2[11]*D_y_3_t4 + gammma2[12]*D_y_3_t3 
+
+D_y_3_t15 <-      alpha3[1]*D_y_1_t14 + alpha3[2]*D_y_1_t13 + alpha3[3]*D_y_1_t12 + alpha3[4]*D_y_1_t11 + alpha3[5]*D_y_1_t10 + alpha3[6]*D_y_1_t9 + alpha3[7]*D_y_1_t8 + alpha3[8]*D_y_1_t7 + alpha3[9]*D_y_1_t6 +
+                  alpha3[10]*D_y_1_t5 + alpha3[11]*D_y_1_t4 + alpha3[12]*D_y_1_t3 +
+                  beta3[1]*D_y_2_t14 + beta3[2]*D_y_2_t13 + beta3[3]*D_y_2_t12 + beta3[4]*D_y_2_t11 + beta3[5]*D_y_2_t10 + beta3[6]*D_y_2_t9 + beta3[7]*D_y_2_t8 + beta3[8]*D_y_2_t7 + beta3[9]*D_y_2_t6 +
+                  beta3[10]*D_y_2_t5 + beta3[11]*D_y_2_t4 + beta3[12]*D_y_2_t3 +
+                  gammma3[1]*D_y_3_t14 + gammma3[2]*D_y_3_t13 + gammma3[3]*D_y_3_t12 + gammma3[4]*D_y_3_t11+ gammma3[5]*D_y_3_t10 + gammma3[6]*D_y_3_t9 + gammma3[7]*D_y_3_t8 + gammma3[8]*D_y_3_t7 + gammma3[9]*D_y_3_t6 + 
+                  gammma3[10]*D_y_3_t5 + gammma3[11]*D_y_3_t4 + gammma3[12]*D_y_3_t3 
+                  
+
+#IRF t = 16
+D_y_1_t16 <-      alpha1[1]*D_y_1_t15 + alpha1[2]*D_y_1_t14 + alpha1[3]*D_y_1_t13 + alpha1[4]*D_y_1_t12 + alpha1[5]*D_y_1_t11 + alpha1[6]*D_y_1_t10 + alpha1[7]*D_y_1_t9 + alpha1[8]*D_y_1_t8 + alpha1[9]*D_y_1_t7 +
+                  alpha1[10]*D_y_1_t6 + alpha1[11]*D_y_1_t5 + alpha1[12]*D_y_1_t4 +
+                  beta1[1]*D_y_2_t15 + beta1[2]*D_y_2_t14 + beta1[3]*D_y_2_t13 + beta1[4]*D_y_2_t12 + beta1[5]*D_y_2_t11 + beta1[6]*D_y_2_t10 + beta1[7]*D_y_2_t9 + beta1[8]*D_y_2_t8 + beta1[9]*D_y_2_t7 +
+                  beta1[10]*D_y_2_t6 + beta1[11]*D_y_2_t5 + beta1[12]*D_y_2_t4 +
+                  gammma1[1]*D_y_3_t15 + gammma1[2]*D_y_3_t14 + gammma1[3]*D_y_3_t13 + gammma1[4]*D_y_3_t12+ gammma1[5]*D_y_3_t11 + gammma1[6]*D_y_3_t10 + gammma1[7]*D_y_3_t9 + gammma1[8]*D_y_3_t8 + gammma1[9]*D_y_3_t7 + 
+                  gammma1[10]*D_y_3_t6 + gammma1[11]*D_y_3_t5 + gammma1[12]*D_y_3_t4 
+
+D_y_2_t16 <-      alpha2[1]*D_y_1_t15 + alpha2[2]*D_y_1_t14 + alpha2[3]*D_y_1_t13 + alpha2[4]*D_y_1_t12 + alpha2[5]*D_y_1_t11 + alpha2[6]*D_y_1_t10 + alpha2[7]*D_y_1_t9 + alpha2[8]*D_y_1_t8 + alpha2[9]*D_y_1_t7 +
+                  alpha2[10]*D_y_1_t6 + alpha2[11]*D_y_1_t5 + alpha2[12]*D_y_1_t4 +
+                  beta2[1]*D_y_2_t15 + beta2[2]*D_y_2_t14 + beta2[3]*D_y_2_t13 + beta2[4]*D_y_2_t12 + beta2[5]*D_y_2_t11 + beta2[6]*D_y_2_t10 + beta2[7]*D_y_2_t9 + beta2[8]*D_y_2_t8 + beta2[9]*D_y_2_t7 +
+                  beta2[10]*D_y_2_t6 + beta2[11]*D_y_2_t5 + beta2[12]*D_y_2_t4 +
+                  gammma2[1]*D_y_3_t15 + gammma2[2]*D_y_3_t14 + gammma2[3]*D_y_3_t13 + gammma2[4]*D_y_3_t12+ gammma2[5]*D_y_3_t11 + gammma2[6]*D_y_3_t10 + gammma2[7]*D_y_3_t9 + gammma2[8]*D_y_3_t8 + gammma2[9]*D_y_3_t7 + 
+                  gammma2[10]*D_y_3_t6 + gammma2[11]*D_y_3_t5 + gammma2[12]*D_y_3_t4 
+
+D_y_3_t16 <-      alpha3[1]*D_y_1_t15 + alpha3[2]*D_y_1_t14 + alpha3[3]*D_y_1_t13 + alpha3[4]*D_y_1_t12 + alpha3[5]*D_y_1_t11 + alpha3[6]*D_y_1_t10 + alpha3[7]*D_y_1_t9 + alpha3[8]*D_y_1_t8 + alpha3[9]*D_y_1_t7 +
+                  alpha3[10]*D_y_1_t6 + alpha3[11]*D_y_1_t5 + alpha3[12]*D_y_1_t4 +
+                  beta3[1]*D_y_2_t15 + beta3[2]*D_y_2_t14 + beta3[3]*D_y_2_t13 + beta3[4]*D_y_2_t12 + beta3[5]*D_y_2_t11 + beta3[6]*D_y_2_t10 + beta3[7]*D_y_2_t9 + beta3[8]*D_y_2_t8 + beta3[9]*D_y_2_t7 +
+                  beta3[10]*D_y_2_t6 + beta3[11]*D_y_2_t5 + beta3[12]*D_y_2_t4 +
+                  gammma3[1]*D_y_3_t15 + gammma3[2]*D_y_3_t14 + gammma3[3]*D_y_3_t13 + gammma3[4]*D_y_3_t12+ gammma3[5]*D_y_3_t11 + gammma3[6]*D_y_3_t10 + gammma3[7]*D_y_3_t9 + gammma3[8]*D_y_3_t8 + gammma3[9]*D_y_3_t7 + 
+                  gammma3[10]*D_y_3_t6 + gammma3[11]*D_y_3_t5 + gammma3[12]*D_y_3_t4 
+
+
+#IRF t = 17
+D_y_1_t17 <-      alpha1[1]*D_y_1_t16 + alpha1[2]*D_y_1_t15 + alpha1[3]*D_y_1_t14 + alpha1[4]*D_y_1_t13 + alpha1[5]*D_y_1_t12 + alpha1[6]*D_y_1_t11 + alpha1[7]*D_y_1_t10 + alpha1[8]*D_y_1_t9 + alpha1[9]*D_y_1_t8 +
+                  alpha1[10]*D_y_1_t7 + alpha1[11]*D_y_1_t6 + alpha1[12]*D_y_1_t5 +
+                  beta1[1]*D_y_2_t16 + beta1[2]*D_y_2_t15 + beta1[3]*D_y_2_t14 + beta1[4]*D_y_2_t13 + beta1[5]*D_y_2_t12 + beta1[6]*D_y_2_t11 + beta1[7]*D_y_2_t10 + beta1[8]*D_y_2_t9 + beta1[9]*D_y_2_t8 +
+                  beta1[10]*D_y_2_t7 + beta1[11]*D_y_2_t6 + beta1[12]*D_y_2_t5 +
+                  gammma1[1]*D_y_3_t16 + gammma1[2]*D_y_3_t15 + gammma1[3]*D_y_3_t14 + gammma1[4]*D_y_3_t13 + gammma1[5]*D_y_3_t12 + gammma1[6]*D_y_3_t11 + gammma1[7]*D_y_3_t10 + gammma1[8]*D_y_3_t9 + gammma1[9]*D_y_3_t8 + 
+                  gammma1[10]*D_y_3_t7 + gammma1[11]*D_y_3_t6 + gammma1[12]*D_y_3_t5 
+
+D_y_2_t17 <-      alpha2[1]*D_y_1_t16 + alpha2[2]*D_y_1_t15 + alpha2[3]*D_y_1_t14 + alpha2[4]*D_y_1_t13 + alpha2[5]*D_y_1_t12 + alpha2[6]*D_y_1_t11 + alpha2[7]*D_y_1_t10 + alpha2[8]*D_y_1_t9 + alpha2[9]*D_y_1_t8 +
+                  alpha2[10]*D_y_1_t7 + alpha2[11]*D_y_1_t6 + alpha2[12]*D_y_1_t5 +
+                  beta2[1]*D_y_2_t16 + beta2[2]*D_y_2_t15 + beta2[3]*D_y_2_t14 + beta2[4]*D_y_2_t13 + beta2[5]*D_y_2_t12 + beta2[6]*D_y_2_t11 + beta2[7]*D_y_2_t10 + beta2[8]*D_y_2_t9 + beta2[9]*D_y_2_t8 +
+                  beta2[10]*D_y_2_t7 + beta2[11]*D_y_2_t6 + beta2[12]*D_y_2_t5 +
+                  gammma2[1]*D_y_3_t16 + gammma2[2]*D_y_3_t15 + gammma2[3]*D_y_3_t14 + gammma2[4]*D_y_3_t13 + gammma2[5]*D_y_3_t12 + gammma2[6]*D_y_3_t11 + gammma2[7]*D_y_3_t10 + gammma2[8]*D_y_3_t9 + gammma2[9]*D_y_3_t8 + 
+                  gammma2[10]*D_y_3_t7 + gammma2[11]*D_y_3_t6 + gammma2[12]*D_y_3_t5 
+
+D_y_3_t17 <-      alpha3[1]*D_y_1_t16 + alpha3[2]*D_y_1_t15 + alpha3[3]*D_y_1_t14 + alpha3[4]*D_y_1_t13 + alpha3[5]*D_y_1_t12 + alpha3[6]*D_y_1_t11 + alpha3[7]*D_y_1_t10 + alpha3[8]*D_y_1_t9 + alpha3[9]*D_y_1_t8 +
+                  alpha3[10]*D_y_1_t7 + alpha3[11]*D_y_1_t6 + alpha3[12]*D_y_1_t5 +
+                  beta3[1]*D_y_2_t16 + beta3[2]*D_y_2_t15 + beta3[3]*D_y_2_t14 + beta3[4]*D_y_2_t13 + beta3[5]*D_y_2_t12 + beta3[6]*D_y_2_t11 + beta3[7]*D_y_2_t10 + beta3[8]*D_y_2_t9 + beta3[9]*D_y_2_t8 +
+                  beta3[10]*D_y_2_t7 + beta3[11]*D_y_2_t6 + beta3[12]*D_y_2_t5 +
+                  gammma3[1]*D_y_3_t16 + gammma3[2]*D_y_3_t15 + gammma3[3]*D_y_3_t14 + gammma3[4]*D_y_3_t13 + gammma3[5]*D_y_3_t12 + gammma3[6]*D_y_3_t11 + gammma3[7]*D_y_3_t10 + gammma3[8]*D_y_3_t9 + gammma3[9]*D_y_3_t8 + 
+                  gammma3[10]*D_y_3_t7 + gammma3[11]*D_y_3_t6 + gammma3[12]*D_y_3_t5 
+
+#IRF t = 18
+D_y_1_t18 <-      alpha1[1]*D_y_1_t17 + alpha1[2]*D_y_1_t16 + alpha1[3]*D_y_1_t15 + alpha1[4]*D_y_1_t14 + alpha1[5]*D_y_1_t13 + alpha1[6]*D_y_1_t12 + alpha1[7]*D_y_1_t11 + alpha1[8]*D_y_1_t10 + alpha1[9]*D_y_1_t9 +
+                  alpha1[10]*D_y_1_t8 + alpha1[11]*D_y_1_t7 + alpha1[12]*D_y_1_t6 +
+                  beta1[1]*D_y_2_t17 + beta1[2]*D_y_2_t16 + beta1[3]*D_y_2_t15 + beta1[4]*D_y_2_t14 + beta1[5]*D_y_2_t13 + beta1[6]*D_y_2_t12 + beta1[7]*D_y_2_t11 + beta1[8]*D_y_2_t10 + beta1[9]*D_y_2_t9 +
+                  beta1[10]*D_y_2_t8 + beta1[11]*D_y_2_t7 + beta1[12]*D_y_2_t6 +
+                  gammma1[1]*D_y_3_t17 + gammma1[2]*D_y_3_t16 + gammma1[3]*D_y_3_t15 + gammma1[4]*D_y_3_t14 + gammma1[5]*D_y_3_t13 + gammma1[6]*D_y_3_t12 + gammma1[7]*D_y_3_t11 + gammma1[8]*D_y_3_t10 + gammma1[9]*D_y_3_t9 + 
+                  gammma1[10]*D_y_3_t8 + gammma1[11]*D_y_3_t7 + gammma1[12]*D_y_3_t6 
+
+D_y_2_t18 <-      alpha2[1]*D_y_1_t17 + alpha2[2]*D_y_1_t16 + alpha2[3]*D_y_1_t15 + alpha2[4]*D_y_1_t14 + alpha2[5]*D_y_1_t13 + alpha2[6]*D_y_1_t12 + alpha2[7]*D_y_1_t11 + alpha2[8]*D_y_1_t10 + alpha2[9]*D_y_1_t9 +
+                  alpha2[10]*D_y_1_t8 + alpha2[11]*D_y_1_t7 + alpha2[12]*D_y_1_t6 +
+                  beta2[1]*D_y_2_t17 + beta2[2]*D_y_2_t16 + beta2[3]*D_y_2_t15 + beta2[4]*D_y_2_t14 + beta2[5]*D_y_2_t13 + beta2[6]*D_y_2_t12 + beta2[7]*D_y_2_t11 + beta2[8]*D_y_2_t10 + beta2[9]*D_y_2_t9 +
+                  beta2[10]*D_y_2_t8 + beta2[11]*D_y_2_t7 + beta2[12]*D_y_2_t6 +
+                  gammma2[1]*D_y_3_t17 + gammma2[2]*D_y_3_t16 + gammma2[3]*D_y_3_t15 + gammma2[4]*D_y_3_t14 + gammma2[5]*D_y_3_t13 + gammma2[6]*D_y_3_t12 + gammma2[7]*D_y_3_t11 + gammma2[8]*D_y_3_t10 + gammma2[9]*D_y_3_t9 + 
+                  gammma2[10]*D_y_3_t8 + gammma2[11]*D_y_3_t7 + gammma2[12]*D_y_3_t6 
+
+D_y_3_t18 <-      alpha3[1]*D_y_1_t17 + alpha3[2]*D_y_1_t16 + alpha3[3]*D_y_1_t15 + alpha3[4]*D_y_1_t14 + alpha3[5]*D_y_1_t13 + alpha3[6]*D_y_1_t12 + alpha3[7]*D_y_1_t11 + alpha3[8]*D_y_1_t10 + alpha3[9]*D_y_1_t9 +
+                  alpha3[10]*D_y_1_t8 + alpha3[11]*D_y_1_t7 + alpha3[12]*D_y_1_t6 +
+                  beta3[1]*D_y_2_t17 + beta3[2]*D_y_2_t16 + beta3[3]*D_y_2_t15 + beta3[4]*D_y_2_t14 + beta3[5]*D_y_2_t13 + beta3[6]*D_y_2_t12 + beta3[7]*D_y_2_t11 + beta3[8]*D_y_2_t10 + beta3[9]*D_y_2_t9 +
+                  beta3[10]*D_y_2_t8 + beta3[11]*D_y_2_t7 + beta3[12]*D_y_2_t6 +
+                  gammma3[1]*D_y_3_t17 + gammma3[2]*D_y_3_t16 + gammma3[3]*D_y_3_t15 + gammma3[4]*D_y_3_t14 + gammma3[5]*D_y_3_t13 + gammma3[6]*D_y_3_t12 + gammma3[7]*D_y_3_t11 + gammma3[8]*D_y_3_t10 + gammma3[9]*D_y_3_t9 + 
+                  gammma3[10]*D_y_3_t8 + gammma3[11]*D_y_3_t7 + gammma3[12]*D_y_3_t6 
+
+#IRF t = 19
+D_y_1_t19 <-      alpha1[1]*D_y_1_t18 + alpha1[2]*D_y_1_t17 + alpha1[3]*D_y_1_t16 + alpha1[4]*D_y_1_t15 + alpha1[5]*D_y_1_t14 + alpha1[6]*D_y_1_t13 + alpha1[7]*D_y_1_t12 + alpha1[8]*D_y_1_t11 + alpha1[9]*D_y_1_t10 +
+                  alpha1[10]*D_y_1_t9 + alpha1[11]*D_y_1_t8 + alpha1[12]*D_y_1_t7 +
+                  beta1[1]*D_y_2_t18 + beta1[2]*D_y_2_t17 + beta1[3]*D_y_2_t16 + beta1[4]*D_y_2_t15 + beta1[5]*D_y_2_t14 + beta1[6]*D_y_2_t13 + beta1[7]*D_y_2_t12 + beta1[8]*D_y_2_t11 + beta1[9]*D_y_2_t10 +
+                  beta1[10]*D_y_2_t9 + beta1[11]*D_y_2_t8 + beta1[12]*D_y_2_t7 +
+                  gammma1[1]*D_y_3_t18 + gammma1[2]*D_y_3_t17 + gammma1[3]*D_y_3_t16 + gammma1[4]*D_y_3_t15 + gammma1[5]*D_y_3_t14 + gammma1[6]*D_y_3_t13 + gammma1[7]*D_y_3_t12 + gammma1[8]*D_y_3_t11 + gammma1[9]*D_y_3_t10 + 
+                  gammma1[10]*D_y_3_t9 + gammma1[11]*D_y_3_t8 + gammma1[12]*D_y_3_t7 
+
+D_y_2_t19 <-      alpha2[1]*D_y_1_t18 + alpha2[2]*D_y_1_t17 + alpha2[3]*D_y_1_t16 + alpha2[4]*D_y_1_t15 + alpha2[5]*D_y_1_t14 + alpha2[6]*D_y_1_t13 + alpha2[7]*D_y_1_t12 + alpha2[8]*D_y_1_t11 + alpha2[9]*D_y_1_t10 +
+                  alpha2[10]*D_y_1_t9 + alpha2[11]*D_y_1_t8 + alpha2[12]*D_y_1_t7 +
+                  beta2[1]*D_y_2_t18 + beta2[2]*D_y_2_t17 + beta2[3]*D_y_2_t16 + beta2[4]*D_y_2_t15 + beta2[5]*D_y_2_t14 + beta2[6]*D_y_2_t13 + beta2[7]*D_y_2_t12 + beta2[8]*D_y_2_t11 + beta2[9]*D_y_2_t10 +
+                  beta2[10]*D_y_2_t9 + beta2[11]*D_y_2_t8 + beta2[12]*D_y_2_t7 +
+                  gammma2[1]*D_y_3_t18 + gammma2[2]*D_y_3_t17 + gammma2[3]*D_y_3_t16 + gammma2[4]*D_y_3_t15 + gammma2[5]*D_y_3_t14 + gammma2[6]*D_y_3_t13 + gammma2[7]*D_y_3_t12 + gammma2[8]*D_y_3_t11 + gammma2[9]*D_y_3_t10 + 
+                  gammma2[10]*D_y_3_t9 + gammma2[11]*D_y_3_t8 + gammma2[12]*D_y_3_t7 
+
+D_y_3_t19 <-      alpha3[1]*D_y_1_t18 + alpha3[2]*D_y_1_t17 + alpha3[3]*D_y_1_t16 + alpha3[4]*D_y_1_t15 + alpha3[5]*D_y_1_t14 + alpha3[6]*D_y_1_t13 + alpha3[7]*D_y_1_t12 + alpha3[8]*D_y_1_t11 + alpha3[9]*D_y_1_t10 +
+                  alpha3[10]*D_y_1_t9 + alpha3[11]*D_y_1_t8 + alpha3[12]*D_y_1_t7 +
+                  beta3[1]*D_y_2_t18 + beta3[2]*D_y_2_t17 + beta3[3]*D_y_2_t16 + beta3[4]*D_y_2_t15 + beta3[5]*D_y_2_t14 + beta3[6]*D_y_2_t13 + beta3[7]*D_y_2_t12 + beta3[8]*D_y_2_t11 + beta3[9]*D_y_2_t10 +
+                  beta3[10]*D_y_2_t9 + beta3[11]*D_y_2_t8 + beta3[12]*D_y_2_t7 +
+                  gammma3[1]*D_y_3_t18 + gammma3[2]*D_y_3_t17 + gammma3[3]*D_y_3_t16 + gammma3[4]*D_y_3_t15 + gammma3[5]*D_y_3_t14 + gammma3[6]*D_y_3_t13 + gammma3[7]*D_y_3_t12 + gammma3[8]*D_y_3_t11 + gammma3[9]*D_y_3_t10 + 
+                  gammma3[10]*D_y_3_t9 + gammma3[11]*D_y_3_t8 + gammma3[12]*D_y_3_t7 
+
+#IRF t = 20
+D_y_1_t20 <-      alpha1[1]*D_y_1_t19 + alpha1[2]*D_y_1_t18 + alpha1[3]*D_y_1_t17 + alpha1[4]*D_y_1_t16 + alpha1[5]*D_y_1_t15 + alpha1[6]*D_y_1_t14 + alpha1[7]*D_y_1_t13 + alpha1[8]*D_y_1_t12 + alpha1[9]*D_y_1_t11 +
+                  alpha1[10]*D_y_1_t10 + alpha1[11]*D_y_1_t9 + alpha1[12]*D_y_1_t8 +
+                  beta1[1]*D_y_2_t19 + beta1[2]*D_y_2_t18 + beta1[3]*D_y_2_t17 + beta1[4]*D_y_2_t16 + beta1[5]*D_y_2_t15 + beta1[6]*D_y_2_t14 + beta1[7]*D_y_2_t13 + beta1[8]*D_y_2_t12 + beta1[9]*D_y_2_t11 +
+                  beta1[10]*D_y_2_t10 + beta1[11]*D_y_2_t9 + beta1[12]*D_y_2_t8 +
+                  gammma1[1]*D_y_3_t19 + gammma1[2]*D_y_3_t18 + gammma1[3]*D_y_3_t17 + gammma1[4]*D_y_3_t16 + gammma1[5]*D_y_3_t15 + gammma1[6]*D_y_3_t14 + gammma1[7]*D_y_3_t13 + gammma1[8]*D_y_3_t12 + gammma1[9]*D_y_3_t11 + 
+                  gammma1[10]*D_y_3_t10 + gammma1[11]*D_y_3_t9 + gammma1[12]*D_y_3_t8 
+
+D_y_2_t20 <-      alpha2[1]*D_y_1_t19 + alpha2[2]*D_y_1_t18 + alpha2[3]*D_y_1_t17 + alpha2[4]*D_y_1_t16 + alpha2[5]*D_y_1_t15 + alpha2[6]*D_y_1_t14 + alpha2[7]*D_y_1_t13 + alpha2[8]*D_y_1_t12 + alpha2[9]*D_y_1_t11 +
+                  alpha2[10]*D_y_1_t10 + alpha2[11]*D_y_1_t9 + alpha2[12]*D_y_1_t8 +
+                  beta2[1]*D_y_2_t19 + beta2[2]*D_y_2_t18 + beta2[3]*D_y_2_t17 + beta2[4]*D_y_2_t16 + beta2[5]*D_y_2_t15 + beta2[6]*D_y_2_t14 + beta2[7]*D_y_2_t13 + beta2[8]*D_y_2_t12 + beta2[9]*D_y_2_t11 +
+                  beta2[10]*D_y_2_t10 + beta2[11]*D_y_2_t9 + beta2[12]*D_y_2_t8 +
+                  gammma2[1]*D_y_3_t19 + gammma2[2]*D_y_3_t18 + gammma2[3]*D_y_3_t17 + gammma2[4]*D_y_3_t16 + gammma2[5]*D_y_3_t15 + gammma2[6]*D_y_3_t14 + gammma2[7]*D_y_3_t13 + gammma2[8]*D_y_3_t12 + gammma2[9]*D_y_3_t11 + 
+                  gammma2[10]*D_y_3_t10 + gammma2[11]*D_y_3_t9 + gammma2[12]*D_y_3_t8 
+
+D_y_3_t20 <-      alpha3[1]*D_y_1_t19 + alpha3[2]*D_y_1_t18 + alpha3[3]*D_y_1_t17 + alpha3[4]*D_y_1_t16 + alpha3[5]*D_y_1_t15 + alpha3[6]*D_y_1_t14 + alpha3[7]*D_y_1_t13 + alpha3[8]*D_y_1_t12 + alpha3[9]*D_y_1_t11 +
+                  alpha3[10]*D_y_1_t10 + alpha3[11]*D_y_1_t9 + alpha3[12]*D_y_1_t8 +
+                  beta3[1]*D_y_2_t19 + beta3[2]*D_y_2_t18 + beta3[3]*D_y_2_t17 + beta3[4]*D_y_2_t16 + beta3[5]*D_y_2_t15 + beta3[6]*D_y_2_t14 + beta3[7]*D_y_2_t13 + beta3[8]*D_y_2_t12 + beta3[9]*D_y_2_t11 +
+                  beta3[10]*D_y_2_t10 + beta3[11]*D_y_2_t9 + beta3[12]*D_y_2_t8 +
+                  gammma3[1]*D_y_3_t19 + gammma3[2]*D_y_3_t18 + gammma3[3]*D_y_3_t17 + gammma3[4]*D_y_3_t16 + gammma3[5]*D_y_3_t15 + gammma3[6]*D_y_3_t14 + gammma3[7]*D_y_3_t13 + gammma3[8]*D_y_3_t12 + gammma3[9]*D_y_3_t11 + 
+                  gammma3[10]*D_y_3_t10 + gammma3[11]*D_y_3_t9 + gammma3[12]*D_y_3_t8 
+
+
+
+
+IRF1Vector <- c(D_y_1_t, D_y_1_t1, D_y_1_t2, D_y_1_t3, D_y_1_t4, D_y_1_t5, D_y_1_t6, D_y_1_t7, D_y_1_t8, D_y_1_t9, D_y_1_t10, D_y_1_t11, D_y_1_t12, D_y_1_t13, D_y_1_t14, D_y_1_t15, D_y_1_t16, D_y_1_t17, D_y_1_t18, D_y_1_t19, D_y_1_t20)
+IRF2Vector <- c(D_y_2_t, D_y_2_t1, D_y_2_t2, D_y_2_t3, D_y_2_t4, D_y_2_t5, D_y_2_t6, D_y_2_t7, D_y_2_t8, D_y_2_t9, D_y_2_t10, D_y_2_t11, D_y_2_t12, D_y_2_t13, D_y_2_t14, D_y_2_t15, D_y_2_t16, D_y_2_t17, D_y_2_t18, D_y_2_t19, D_y_2_t20)
+IRF3Vector <- c(D_y_3_t, D_y_3_t1, D_y_3_t2, D_y_3_t3, D_y_3_t4, D_y_3_t5, D_y_3_t6, D_y_3_t7, D_y_3_t8, D_y_3_t9, D_y_3_t10, D_y_3_t11, D_y_3_t12, D_y_3_t13, D_y_3_t14, D_y_3_t15, D_y_3_t16, D_y_3_t17, D_y_3_t18, D_y_3_t19, D_y_3_t20)
+
+########################
+# y1 = unemployment
+# y2 = employment
+# y3 = house prices
+########################
+```
+
+
+# Calculate IRF Individual
+```{r}
+# Bring in Coefficients
+ur_coef <-  c(rep(0,13))
+emp_coef <-  c(rep(0,6),ind_glm$beta[21:27])
+hpi_coef <-  c(ind_glm$beta[28:40])
+
+nd_s_winter <- ind_glm$beta[41:53]
+nd_s_summer <- ind_glm$beta[54:66]
+nd_fire <- ind_glm$beta[67:79]
+nd_flood <- ind_glm$beta[80:92]
+
+# Assign ND 
+if(Scenario == "Winter Storm"){
+  chosend <- nd_s_winter
+} else if(Scenario == "Tropical Storm"){
+  chosend <- nd_s_summer
+} else if(Scenario == "Fire"){
+  chosend <- nd_fire
+} else {
+  chosend <- nd_flood
+}
+
+
+
+# IRF t = 0
+D_yl_t <- ur_coef[1]*D_y_1_t + emp_coef[1]*D_y_2_t + hpi_coef[1]*D_y_3_t + chosend[1]
+
+# IRF t = 1
+D_yl_t1 <- ur_coef[1]*D_y_1_t1 + ur_coef[2]*D_y_1_t + 
+           emp_coef[1]*D_y_2_t1 + emp_coef[2]*D_y_2_t + 
+           hpi_coef[1]*D_y_3_t1 + hpi_coef[2]*D_y_3_t +
+           chosend[2]
+
+# IRF t = 2
+D_yl_t2 <- ur_coef[1]*D_y_1_t2 + ur_coef[2]*D_y_1_t1 + ur_coef[3]*D_y_1_t + 
+           emp_coef[1]*D_y_2_t2 + emp_coef[2]*D_y_2_t1 + emp_coef[3]*D_y_2_t + 
+           hpi_coef[1]*D_y_3_t2 + hpi_coef[2]*D_y_3_t1 + hpi_coef[3]*D_y_3_t +
+           chosend[3]
+
+# IRF t = 3
+D_yl_t3 <- ur_coef[1]*D_y_1_t3 + ur_coef[2]*D_y_1_t2 + ur_coef[3]*D_y_1_t1 + ur_coef[4]*D_y_1_t + 
+           emp_coef[1]*D_y_2_t3 + emp_coef[2]*D_y_2_t2 + emp_coef[3]*D_y_2_t1 + emp_coef[4]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t3 + hpi_coef[2]*D_y_3_t2 + hpi_coef[3]*D_y_3_t1 + hpi_coef[4]*D_y_3_t +
+           chosend[4]
+
+# IRF t = 4
+D_yl_t4 <- ur_coef[1]*D_y_1_t4 + ur_coef[2]*D_y_1_t3 + ur_coef[3]*D_y_1_t2 + ur_coef[4]*D_y_1_t1 + ur_coef[5]*D_y_1_t + 
+           emp_coef[1]*D_y_2_t4 + emp_coef[2]*D_y_2_t3 + emp_coef[3]*D_y_2_t2 + emp_coef[4]*D_y_2_t1 + emp_coef[5]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t4 + hpi_coef[2]*D_y_3_t3 + hpi_coef[3]*D_y_3_t2 + hpi_coef[4]*D_y_3_t1 + hpi_coef[5]*D_y_3_t +
+           chosend[5]
+
+
+# IRF t = 5
+D_yl_t5 <- ur_coef[1]*D_y_1_t5 + ur_coef[2]*D_y_1_t4 + ur_coef[3]*D_y_1_t3 + ur_coef[4]*D_y_1_t2 + ur_coef[5]*D_y_1_t1 + ur_coef[6]*D_y_1_t +
+           emp_coef[1]*D_y_2_t5 + emp_coef[2]*D_y_2_t4 + emp_coef[3]*D_y_2_t3 + emp_coef[4]*D_y_2_t2 + emp_coef[5]*D_y_2_t1 + emp_coef[6]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t5 + hpi_coef[2]*D_y_3_t4 + hpi_coef[3]*D_y_3_t3 + hpi_coef[4]*D_y_3_t2 + hpi_coef[5]*D_y_3_t1 + hpi_coef[6]*D_y_3_t +
+           chosend[6]
+
+
+# IRF t = 6
+D_yl_t6 <- ur_coef[1]*D_y_1_t6 + ur_coef[2]*D_y_1_t5 + ur_coef[3]*D_y_1_t4 + ur_coef[4]*D_y_1_t3 + ur_coef[5]*D_y_1_t2 + ur_coef[6]*D_y_1_t1 + ur_coef[7]*D_y_1_t +
+           emp_coef[1]*D_y_2_t6 + emp_coef[2]*D_y_2_t5 + emp_coef[3]*D_y_2_t4 + emp_coef[4]*D_y_2_t3 + emp_coef[5]*D_y_2_t2 + emp_coef[6]*D_y_2_t1 + emp_coef[7]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t6 + hpi_coef[2]*D_y_3_t5 + hpi_coef[3]*D_y_3_t4 + hpi_coef[4]*D_y_3_t3 + hpi_coef[5]*D_y_3_t2 + hpi_coef[6]*D_y_3_t1 + hpi_coef[7]*D_y_3_t +
+           chosend[7]
+
+# IRF t = 7
+D_yl_t7 <- ur_coef[1]*D_y_1_t7 + ur_coef[2]*D_y_1_t6 + ur_coef[3]*D_y_1_t5 + ur_coef[4]*D_y_1_t4 + ur_coef[5]*D_y_1_t3 + ur_coef[6]*D_y_1_t2 + ur_coef[7]*D_y_1_t1 + ur_coef[8]*D_y_1_t +
+           emp_coef[1]*D_y_2_t7 + emp_coef[2]*D_y_2_t6 + emp_coef[3]*D_y_2_t5 + emp_coef[4]*D_y_2_t4 + emp_coef[5]*D_y_2_t3 + emp_coef[6]*D_y_2_t2 + emp_coef[7]*D_y_2_t1 + emp_coef[8]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t7 + hpi_coef[2]*D_y_3_t6 + hpi_coef[3]*D_y_3_t5 + hpi_coef[4]*D_y_3_t4 + hpi_coef[5]*D_y_3_t3 + hpi_coef[6]*D_y_3_t2 + hpi_coef[7]*D_y_3_t1 + hpi_coef[8]*D_y_3_t +
+           chosend[8]
+
+# IRF t = 8
+D_yl_t8 <- ur_coef[1]*D_y_1_t8 + ur_coef[2]*D_y_1_t7 + ur_coef[3]*D_y_1_t6 + ur_coef[4]*D_y_1_t5 + ur_coef[5]*D_y_1_t4 + ur_coef[6]*D_y_1_t3 + ur_coef[7]*D_y_1_t2 + ur_coef[8]*D_y_1_t1 + ur_coef[9]*D_y_1_t +
+           emp_coef[1]*D_y_2_t8 + emp_coef[2]*D_y_2_t7 + emp_coef[3]*D_y_2_t6 + emp_coef[4]*D_y_2_t5 + emp_coef[5]*D_y_2_t4 + emp_coef[6]*D_y_2_t3 + emp_coef[7]*D_y_2_t2 + emp_coef[8]*D_y_2_t1 + emp_coef[9]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t8 + hpi_coef[2]*D_y_3_t7 + hpi_coef[3]*D_y_3_t6 + hpi_coef[4]*D_y_3_t5 + hpi_coef[5]*D_y_3_t4 + hpi_coef[6]*D_y_3_t3 + hpi_coef[7]*D_y_3_t2 + hpi_coef[8]*D_y_3_t1 + hpi_coef[9]*D_y_3_t +
+           chosend[9]
+
+# IRF t = 9
+D_yl_t9 <- ur_coef[1]*D_y_1_t9 + ur_coef[2]*D_y_1_t8 + ur_coef[3]*D_y_1_t7 + ur_coef[4]*D_y_1_t6 + ur_coef[5]*D_y_1_t5 + ur_coef[6]*D_y_1_t4 + ur_coef[7]*D_y_1_t3 + ur_coef[8]*D_y_1_t2 + ur_coef[9]*D_y_1_t1 +
+           ur_coef[10]*D_y_1_t +
+           emp_coef[1]*D_y_2_t9 + emp_coef[2]*D_y_2_t8 + emp_coef[3]*D_y_2_t7 + emp_coef[4]*D_y_2_t6 + emp_coef[5]*D_y_2_t5 + emp_coef[6]*D_y_2_t4 + emp_coef[7]*D_y_2_t3 + emp_coef[8]*D_y_2_t2 + emp_coef[9]*D_y_2_t1 +
+           emp_coef[10]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t9 + hpi_coef[2]*D_y_3_t8 + hpi_coef[3]*D_y_3_t7 + hpi_coef[4]*D_y_3_t6 + hpi_coef[5]*D_y_3_t5 + hpi_coef[6]*D_y_3_t4 + hpi_coef[7]*D_y_3_t3 + hpi_coef[8]*D_y_3_t2 + hpi_coef[9]*D_y_3_t1 +
+           hpi_coef[10]*D_y_3_t +
+           chosend[10]
+
+# IRF t = 10
+D_yl_t10 <- ur_coef[1]*D_y_1_t10 + ur_coef[2]*D_y_1_t9 + ur_coef[3]*D_y_1_t8 + ur_coef[4]*D_y_1_t7 + ur_coef[5]*D_y_1_t6 + ur_coef[6]*D_y_1_t5 + ur_coef[7]*D_y_1_t4 + ur_coef[8]*D_y_1_t3 + ur_coef[9]*D_y_1_t2 +
+           ur_coef[10]*D_y_1_t1 + ur_coef[11]*D_y_1_t +
+           emp_coef[1]*D_y_2_t10 + emp_coef[2]*D_y_2_t9 + emp_coef[3]*D_y_2_t8 + emp_coef[4]*D_y_2_t7 + emp_coef[5]*D_y_2_t6 + emp_coef[6]*D_y_2_t5 + emp_coef[7]*D_y_2_t4 + emp_coef[8]*D_y_2_t3 + emp_coef[9]*D_y_2_t2 +
+           emp_coef[10]*D_y_2_t1 + emp_coef[11]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t10 + hpi_coef[2]*D_y_3_t9 + hpi_coef[3]*D_y_3_t8 + hpi_coef[4]*D_y_3_t7 + hpi_coef[5]*D_y_3_t6 + hpi_coef[6]*D_y_3_t5 + hpi_coef[7]*D_y_3_t4 + hpi_coef[8]*D_y_3_t3 + hpi_coef[9]*D_y_3_t2 +
+           hpi_coef[10]*D_y_3_t1 + hpi_coef[11]*D_y_3_t +
+           chosend[11]
+
+# IRF t = 11
+D_yl_t11 <- ur_coef[1]*D_y_1_t11 + ur_coef[2]*D_y_1_t10 + ur_coef[3]*D_y_1_t9 + ur_coef[4]*D_y_1_t8 + ur_coef[5]*D_y_1_t7 + ur_coef[6]*D_y_1_t6 + ur_coef[7]*D_y_1_t5 + ur_coef[8]*D_y_1_t4 + ur_coef[9]*D_y_1_t3 +
+           ur_coef[10]*D_y_1_t2 + ur_coef[11]*D_y_1_t1 + ur_coef[12]*D_y_1_t +
+           emp_coef[1]*D_y_2_t11 + emp_coef[2]*D_y_2_t10 + emp_coef[3]*D_y_2_t9 + emp_coef[4]*D_y_2_t8 + emp_coef[5]*D_y_2_t7 + emp_coef[6]*D_y_2_t6 + emp_coef[7]*D_y_2_t5 + emp_coef[8]*D_y_2_t4 + emp_coef[9]*D_y_2_t3 +
+           emp_coef[10]*D_y_2_t2 + emp_coef[11]*D_y_2_t1 + emp_coef[12]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t11 + hpi_coef[2]*D_y_3_t10 + hpi_coef[3]*D_y_3_t9 + hpi_coef[4]*D_y_3_t8 + hpi_coef[5]*D_y_3_t7 + hpi_coef[6]*D_y_3_t6 + hpi_coef[7]*D_y_3_t5 + hpi_coef[8]*D_y_3_t4 + hpi_coef[9]*D_y_3_t3 +
+           hpi_coef[10]*D_y_3_t2 + hpi_coef[11]*D_y_3_t1 + hpi_coef[12]*D_y_3_t +
+           chosend[12]
+
+# IRF t = 12
+D_yl_t12 <- ur_coef[1]*D_y_1_t12 + ur_coef[2]*D_y_1_t11 + ur_coef[3]*D_y_1_t10 + ur_coef[4]*D_y_1_t9 + ur_coef[5]*D_y_1_t8 + ur_coef[6]*D_y_1_t7 + ur_coef[7]*D_y_1_t6 + ur_coef[8]*D_y_1_t5 + ur_coef[9]*D_y_1_t4 +
+           ur_coef[10]*D_y_1_t3 + ur_coef[11]*D_y_1_t2 + ur_coef[12]*D_y_1_t1 + ur_coef[13]*D_y_1_t +
+           emp_coef[1]*D_y_2_t12 + emp_coef[2]*D_y_2_t11 + emp_coef[3]*D_y_2_t10 + emp_coef[4]*D_y_2_t9 + emp_coef[5]*D_y_2_t8 + emp_coef[6]*D_y_2_t7 + emp_coef[7]*D_y_2_t6 + emp_coef[8]*D_y_2_t5 + emp_coef[9]*D_y_2_t4 +
+           emp_coef[10]*D_y_2_t3 + emp_coef[11]*D_y_2_t2 + emp_coef[12]*D_y_2_t1 + emp_coef[13]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t12 + hpi_coef[2]*D_y_3_t11 + hpi_coef[3]*D_y_3_t10 + hpi_coef[4]*D_y_3_t9 + hpi_coef[5]*D_y_3_t8 + hpi_coef[6]*D_y_3_t7 + hpi_coef[7]*D_y_3_t6 + hpi_coef[8]*D_y_3_t5 + hpi_coef[9]*D_y_3_t4 +
+           hpi_coef[10]*D_y_3_t3 + hpi_coef[11]*D_y_3_t2 + hpi_coef[12]*D_y_3_t1 + hpi_coef[13]*D_y_3_t +
+           chosend[13]
+
+# IRF t = 13
+D_yl_t13 <- ur_coef[1]*D_y_1_t13 + ur_coef[2]*D_y_1_t12 + ur_coef[3]*D_y_1_t11 + ur_coef[4]*D_y_1_t10 + ur_coef[5]*D_y_1_t9 + ur_coef[6]*D_y_1_t8 + ur_coef[7]*D_y_1_t7 + ur_coef[8]*D_y_1_t6 + ur_coef[9]*D_y_1_t5 +
+           ur_coef[10]*D_y_1_t4 + ur_coef[11]*D_y_1_t3 + ur_coef[12]*D_y_1_t2 + ur_coef[13]*D_y_1_t1 +
+           emp_coef[1]*D_y_2_t13 + emp_coef[2]*D_y_2_t12 + emp_coef[3]*D_y_2_t11 + emp_coef[4]*D_y_2_t10 + emp_coef[5]*D_y_2_t9 + emp_coef[6]*D_y_2_t8 + emp_coef[7]*D_y_2_t7 + emp_coef[8]*D_y_2_t6 + emp_coef[9]*D_y_2_t5 +
+           emp_coef[10]*D_y_2_t4 + emp_coef[11]*D_y_2_t3 + emp_coef[12]*D_y_2_t2 + emp_coef[13]*D_y_2_t1 +
+           hpi_coef[1]*D_y_3_t13 + hpi_coef[2]*D_y_3_t12 + hpi_coef[3]*D_y_3_t11 + hpi_coef[4]*D_y_3_t10 + hpi_coef[5]*D_y_3_t9 + hpi_coef[6]*D_y_3_t8 + hpi_coef[7]*D_y_3_t7 + hpi_coef[8]*D_y_3_t6 + hpi_coef[9]*D_y_3_t5 +
+           hpi_coef[10]*D_y_3_t4 + hpi_coef[11]*D_y_3_t3 + hpi_coef[12]*D_y_3_t2 + hpi_coef[13]*D_y_3_t1
+
+# IRF t = 14
+D_yl_t14 <- ur_coef[1]*D_y_1_t14 + ur_coef[2]*D_y_1_t13 + ur_coef[3]*D_y_1_t12 + ur_coef[4]*D_y_1_t11 + ur_coef[5]*D_y_1_t10 + ur_coef[6]*D_y_1_t9 + ur_coef[7]*D_y_1_t8 + ur_coef[8]*D_y_1_t7 + ur_coef[9]*D_y_1_t6 +
+           ur_coef[10]*D_y_1_t5 + ur_coef[11]*D_y_1_t4 + ur_coef[12]*D_y_1_t3 + ur_coef[13]*D_y_1_t2 +
+           emp_coef[1]*D_y_2_t14 + emp_coef[2]*D_y_2_t13 + emp_coef[3]*D_y_2_t12 + emp_coef[4]*D_y_2_t11 + emp_coef[5]*D_y_2_t10 + emp_coef[6]*D_y_2_t9 + emp_coef[7]*D_y_2_t8 + emp_coef[8]*D_y_2_t7 + emp_coef[9]*D_y_2_t6 +
+           emp_coef[10]*D_y_2_t5 + emp_coef[11]*D_y_2_t4 + emp_coef[12]*D_y_2_t3 + emp_coef[13]*D_y_2_t2 +
+           hpi_coef[1]*D_y_3_t14 + hpi_coef[2]*D_y_3_t13 + hpi_coef[3]*D_y_3_t12 + hpi_coef[4]*D_y_3_t11 + hpi_coef[5]*D_y_3_t10 + hpi_coef[6]*D_y_3_t9 + hpi_coef[7]*D_y_3_t8 + hpi_coef[8]*D_y_3_t7 + hpi_coef[9]*D_y_3_t6 +
+           hpi_coef[10]*D_y_3_t5 + hpi_coef[11]*D_y_3_t4 + hpi_coef[12]*D_y_3_t3 + hpi_coef[13]*D_y_3_t2
+
+# IRF t = 15
+D_yl_t15 <- ur_coef[1]*D_y_1_t15 + ur_coef[2]*D_y_1_t14 + ur_coef[3]*D_y_1_t13 + ur_coef[4]*D_y_1_t12 + ur_coef[5]*D_y_1_t11 + ur_coef[6]*D_y_1_t10 + ur_coef[7]*D_y_1_t9 + ur_coef[8]*D_y_1_t8 + ur_coef[9]*D_y_1_t7 +
+           ur_coef[10]*D_y_1_t6 + ur_coef[11]*D_y_1_t5 + ur_coef[12]*D_y_1_t4 + ur_coef[13]*D_y_1_t3 +
+           emp_coef[1]*D_y_2_t15 + emp_coef[2]*D_y_2_t14 + emp_coef[3]*D_y_2_t13 + emp_coef[4]*D_y_2_t12 + emp_coef[5]*D_y_2_t11 + emp_coef[6]*D_y_2_t10 + emp_coef[7]*D_y_2_t9 + emp_coef[8]*D_y_2_t8 + emp_coef[9]*D_y_2_t7 +
+           emp_coef[10]*D_y_2_t6 + emp_coef[11]*D_y_2_t5 + emp_coef[12]*D_y_2_t4 + emp_coef[13]*D_y_2_t3 +
+           hpi_coef[1]*D_y_3_t15 + hpi_coef[2]*D_y_3_t14 + hpi_coef[3]*D_y_3_t13 + hpi_coef[4]*D_y_3_t12 + hpi_coef[5]*D_y_3_t11 + hpi_coef[6]*D_y_3_t10 + hpi_coef[7]*D_y_3_t9 + hpi_coef[8]*D_y_3_t8 + hpi_coef[9]*D_y_3_t7 +
+           hpi_coef[10]*D_y_3_t6 + hpi_coef[11]*D_y_3_t5 + hpi_coef[12]*D_y_3_t4 + hpi_coef[13]*D_y_3_t3
+
+# IRF t = 16
+D_yl_t16 <- ur_coef[1]*D_y_1_t16 + ur_coef[2]*D_y_1_t15 + ur_coef[3]*D_y_1_t14 + ur_coef[4]*D_y_1_t13 + ur_coef[5]*D_y_1_t12 + ur_coef[6]*D_y_1_t11 + ur_coef[7]*D_y_1_t10 + ur_coef[8]*D_y_1_t9 + ur_coef[9]*D_y_1_t8 +
+           ur_coef[10]*D_y_1_t7 + ur_coef[11]*D_y_1_t6 + ur_coef[12]*D_y_1_t5 + ur_coef[13]*D_y_1_t4 +
+           emp_coef[1]*D_y_2_t16 + emp_coef[2]*D_y_2_t15 + emp_coef[3]*D_y_2_t14 + emp_coef[4]*D_y_2_t13 + emp_coef[5]*D_y_2_t12 + emp_coef[6]*D_y_2_t11 + emp_coef[7]*D_y_2_t10 + emp_coef[8]*D_y_2_t9 + emp_coef[9]*D_y_2_t8 +
+           emp_coef[10]*D_y_2_t7 + emp_coef[11]*D_y_2_t6 + emp_coef[12]*D_y_2_t5 + emp_coef[13]*D_y_2_t4 +
+           hpi_coef[1]*D_y_3_t16 + hpi_coef[2]*D_y_3_t15 + hpi_coef[3]*D_y_3_t14 + hpi_coef[4]*D_y_3_t13 + hpi_coef[5]*D_y_3_t12 + hpi_coef[6]*D_y_3_t11 + hpi_coef[7]*D_y_3_t10 + hpi_coef[8]*D_y_3_t9 + hpi_coef[9]*D_y_3_t8 +
+           hpi_coef[10]*D_y_3_t7 + hpi_coef[11]*D_y_3_t6 + hpi_coef[12]*D_y_3_t5 + hpi_coef[13]*D_y_3_t4
+
+# IRF t = 17
+D_yl_t17 <- ur_coef[1]*D_y_1_t17 + ur_coef[2]*D_y_1_t16 + ur_coef[3]*D_y_1_t15 + ur_coef[4]*D_y_1_t14 + ur_coef[5]*D_y_1_t13 + ur_coef[6]*D_y_1_t12 + ur_coef[7]*D_y_1_t11 + ur_coef[8]*D_y_1_t10 + ur_coef[9]*D_y_1_t9 +
+           ur_coef[10]*D_y_1_t8 + ur_coef[11]*D_y_1_t7 + ur_coef[12]*D_y_1_t6 + ur_coef[13]*D_y_1_t5 +
+           emp_coef[1]*D_y_2_t17 + emp_coef[2]*D_y_2_t16 + emp_coef[3]*D_y_2_t15 + emp_coef[4]*D_y_2_t14 + emp_coef[5]*D_y_2_t13 + emp_coef[6]*D_y_2_t12 + emp_coef[7]*D_y_2_t11 + emp_coef[8]*D_y_2_t10 + emp_coef[9]*D_y_2_t9 +
+           emp_coef[10]*D_y_2_t8 + emp_coef[11]*D_y_2_t7 + emp_coef[12]*D_y_2_t6 + emp_coef[13]*D_y_2_t5 +
+           hpi_coef[1]*D_y_3_t17 + hpi_coef[2]*D_y_3_t16 + hpi_coef[3]*D_y_3_t15 + hpi_coef[4]*D_y_3_t14 + hpi_coef[5]*D_y_3_t13 + hpi_coef[6]*D_y_3_t12 + hpi_coef[7]*D_y_3_t11 + hpi_coef[8]*D_y_3_t10 + hpi_coef[9]*D_y_3_t9 +
+           hpi_coef[10]*D_y_3_t8 + hpi_coef[11]*D_y_3_t7 + hpi_coef[12]*D_y_3_t6 + hpi_coef[13]*D_y_3_t5
+
+# IRF t = 18
+D_yl_t18 <- ur_coef[1]*D_y_1_t18 + ur_coef[2]*D_y_1_t17 + ur_coef[3]*D_y_1_t16 + ur_coef[4]*D_y_1_t15 + ur_coef[5]*D_y_1_t14 + ur_coef[6]*D_y_1_t13 + ur_coef[7]*D_y_1_t12 + ur_coef[8]*D_y_1_t11 + ur_coef[9]*D_y_1_t10 +
+           ur_coef[10]*D_y_1_t9 + ur_coef[11]*D_y_1_t8 + ur_coef[12]*D_y_1_t7 + ur_coef[13]*D_y_1_t6 +
+           emp_coef[1]*D_y_2_t18 + emp_coef[2]*D_y_2_t17 + emp_coef[3]*D_y_2_t16 + emp_coef[4]*D_y_2_t15 + emp_coef[5]*D_y_2_t14 + emp_coef[6]*D_y_2_t13 + emp_coef[7]*D_y_2_t12 + emp_coef[8]*D_y_2_t11 + emp_coef[9]*D_y_2_t10 +
+           emp_coef[10]*D_y_2_t9 + emp_coef[11]*D_y_2_t8 + emp_coef[12]*D_y_2_t7 + emp_coef[13]*D_y_2_t6 +
+           hpi_coef[1]*D_y_3_t18 + hpi_coef[2]*D_y_3_t17 + hpi_coef[3]*D_y_3_t16 + hpi_coef[4]*D_y_3_t15 + hpi_coef[5]*D_y_3_t14 + hpi_coef[6]*D_y_3_t13 + hpi_coef[7]*D_y_3_t12 + hpi_coef[8]*D_y_3_t11 + hpi_coef[9]*D_y_3_t10 +
+           hpi_coef[10]*D_y_3_t9 + hpi_coef[11]*D_y_3_t8 + hpi_coef[12]*D_y_3_t7 + hpi_coef[13]*D_y_3_t6
+
+# IRF t = 19
+D_yl_t19 <- ur_coef[1]*D_y_1_t19 + ur_coef[2]*D_y_1_t18 + ur_coef[3]*D_y_1_t17 + ur_coef[4]*D_y_1_t16 + ur_coef[5]*D_y_1_t15 + ur_coef[6]*D_y_1_t14 + ur_coef[7]*D_y_1_t13 + ur_coef[8]*D_y_1_t12 + ur_coef[9]*D_y_1_t11 +
+           ur_coef[10]*D_y_1_t10 + ur_coef[11]*D_y_1_t9 + ur_coef[12]*D_y_1_t8 + ur_coef[13]*D_y_1_t7 +
+           emp_coef[1]*D_y_2_t19 + emp_coef[2]*D_y_2_t18 + emp_coef[3]*D_y_2_t17 + emp_coef[4]*D_y_2_t16 + emp_coef[5]*D_y_2_t15 + emp_coef[6]*D_y_2_t14 + emp_coef[7]*D_y_2_t13 + emp_coef[8]*D_y_2_t12 + emp_coef[9]*D_y_2_t11 +
+           emp_coef[10]*D_y_2_t10 + emp_coef[11]*D_y_2_t9 + emp_coef[12]*D_y_2_t8 + emp_coef[13]*D_y_2_t7 +
+           hpi_coef[1]*D_y_3_t19 + hpi_coef[2]*D_y_3_t18 + hpi_coef[3]*D_y_3_t17 + hpi_coef[4]*D_y_3_t16 + hpi_coef[5]*D_y_3_t15 + hpi_coef[6]*D_y_3_t14 + hpi_coef[7]*D_y_3_t13 + hpi_coef[8]*D_y_3_t12 + hpi_coef[9]*D_y_3_t11 +
+           hpi_coef[10]*D_y_3_t10 + hpi_coef[11]*D_y_3_t9 + hpi_coef[12]*D_y_3_t8 + hpi_coef[13]*D_y_3_t7
+
+# IRF t = 20
+D_yl_t20 <- ur_coef[1]*D_y_1_t20 + ur_coef[2]*D_y_1_t19 + ur_coef[3]*D_y_1_t18 + ur_coef[4]*D_y_1_t17 + ur_coef[5]*D_y_1_t16 + ur_coef[6]*D_y_1_t15 + ur_coef[7]*D_y_1_t14 + ur_coef[8]*D_y_1_t13 + ur_coef[9]*D_y_1_t12 +
+           ur_coef[10]*D_y_1_t11 + ur_coef[11]*D_y_1_t10 + ur_coef[12]*D_y_1_t9 + ur_coef[13]*D_y_1_t8 +
+           emp_coef[1]*D_y_2_t20 + emp_coef[2]*D_y_2_t19 + emp_coef[3]*D_y_2_t18 + emp_coef[4]*D_y_2_t17 + emp_coef[5]*D_y_2_t16 + emp_coef[6]*D_y_2_t15 + emp_coef[7]*D_y_2_t14 + emp_coef[8]*D_y_2_t13 + emp_coef[9]*D_y_2_t12 +
+           emp_coef[10]*D_y_2_t11 + emp_coef[11]*D_y_2_t10 + emp_coef[12]*D_y_2_t9 + emp_coef[13]*D_y_2_t8 +
+           hpi_coef[1]*D_y_3_t20 + hpi_coef[2]*D_y_3_t19 + hpi_coef[3]*D_y_3_t18 + hpi_coef[4]*D_y_3_t17 + hpi_coef[5]*D_y_3_t16 + hpi_coef[6]*D_y_3_t15 + hpi_coef[7]*D_y_3_t14 + hpi_coef[8]*D_y_3_t13 + hpi_coef[9]*D_y_3_t12 +
+           hpi_coef[10]*D_y_3_t11 + hpi_coef[11]*D_y_3_t10 + hpi_coef[12]*D_y_3_t9 + hpi_coef[13]*D_y_3_t8
+
+IRFlVector <- c(D_yl_t, D_yl_t1, D_yl_t2, D_yl_t3, D_yl_t4, D_yl_t5, D_yl_t6, D_yl_t7, D_yl_t8, D_yl_t9, D_yl_t10, D_yl_t11, D_yl_t12, D_yl_t13, D_yl_t14, D_yl_t15, D_yl_t16, D_yl_t17, D_yl_t18, D_yl_t19, D_yl_t20)
+IRFlVector %>% plot()
+
+data.frame(x = seq(0,20,by=1),pdefault = IRFlVector) %>% ggplot(aes(x = x, y = pdefault)) + geom_line() + theme_bw() + ggtitle(paste0(Scenario, " - Prob Default"))
+```
+
+
+
+
+
+
+
+
+# IRF BOOTSTRAP VAR + IND
+```{r}
+########################
+# y1 = unemployment
+# y2 = employment
+# y3 = house prices
+########################
+
+
+#Loop Count
+set.seed(28804783)
+m <- 1000
+SampleIndep <-  FALSE
+
+D_y_1_t_vec <- rep(NA, m)
+D_y_1_t1_vec <- rep(NA, m)
+D_y_1_t2_vec <- rep(NA, m)
+D_y_1_t3_vec <- rep(NA, m)
+D_y_1_t4_vec <- rep(NA, m)
+D_y_1_t5_vec <- rep(NA, m)
+D_y_1_t6_vec <- rep(NA, m)
+D_y_1_t7_vec <- rep(NA, m)
+D_y_1_t8_vec <- rep(NA, m)
+D_y_1_t9_vec <- rep(NA, m)
+D_y_1_t10_vec <- rep(NA, m)
+D_y_1_t11_vec <- rep(NA, m)
+D_y_1_t12_vec <- rep(NA, m)
+D_y_1_t13_vec <- rep(NA, m)
+D_y_1_t14_vec <- rep(NA, m)
+D_y_1_t15_vec <- rep(NA, m)
+D_y_1_t16_vec <- rep(NA, m)
+D_y_1_t17_vec <- rep(NA, m)
+D_y_1_t18_vec <- rep(NA, m)
+D_y_1_t19_vec <- rep(NA, m)
+D_y_1_t20_vec <- rep(NA, m)
+
+D_y_2_t_vec <- rep(NA, m)
+D_y_2_t1_vec <- rep(NA, m)
+D_y_2_t2_vec <- rep(NA, m)
+D_y_2_t3_vec <- rep(NA, m)
+D_y_2_t4_vec <- rep(NA, m)
+D_y_2_t5_vec <- rep(NA, m)
+D_y_2_t6_vec <- rep(NA, m)
+D_y_2_t7_vec <- rep(NA, m)
+D_y_2_t8_vec <- rep(NA, m)
+D_y_2_t9_vec <- rep(NA, m)
+D_y_2_t10_vec <- rep(NA, m)
+D_y_2_t11_vec <- rep(NA, m)
+D_y_2_t12_vec <- rep(NA, m)
+D_y_2_t13_vec <- rep(NA, m)
+D_y_2_t14_vec <- rep(NA, m)
+D_y_2_t15_vec <- rep(NA, m)
+D_y_2_t16_vec <- rep(NA, m)
+D_y_2_t17_vec <- rep(NA, m)
+D_y_2_t18_vec <- rep(NA, m)
+D_y_2_t19_vec <- rep(NA, m)
+D_y_2_t20_vec <- rep(NA, m)
+
+D_y_3_t_vec <- rep(NA, m)
+D_y_3_t1_vec <- rep(NA, m)
+D_y_3_t2_vec <- rep(NA, m)
+D_y_3_t3_vec <- rep(NA, m)
+D_y_3_t4_vec <- rep(NA, m)
+D_y_3_t5_vec <- rep(NA, m)
+D_y_3_t6_vec <- rep(NA, m)
+D_y_3_t7_vec <- rep(NA, m)
+D_y_3_t8_vec <- rep(NA, m)
+D_y_3_t9_vec <- rep(NA, m)
+D_y_3_t10_vec <- rep(NA, m)
+D_y_3_t11_vec <- rep(NA, m)
+D_y_3_t12_vec <- rep(NA, m)
+D_y_3_t13_vec <- rep(NA, m)
+D_y_3_t14_vec <- rep(NA, m)
+D_y_3_t15_vec <- rep(NA, m)
+D_y_3_t16_vec <- rep(NA, m)
+D_y_3_t17_vec <- rep(NA, m)
+D_y_3_t18_vec <- rep(NA, m)
+D_y_3_t19_vec <- rep(NA, m)
+D_y_3_t20_vec <- rep(NA, m)
+
+
+
+# IND ####################################################
+D_yl_t_vec <- rep(NA, m)
+D_yl_t1_vec <- rep(NA, m)
+D_yl_t2_vec <- rep(NA, m)
+D_yl_t3_vec <- rep(NA, m)
+D_yl_t4_vec <- rep(NA, m)
+D_yl_t5_vec <- rep(NA, m)
+D_yl_t6_vec <- rep(NA, m)
+D_yl_t7_vec <- rep(NA, m)
+D_yl_t8_vec <- rep(NA, m)
+D_yl_t9_vec <- rep(NA, m)
+D_yl_t10_vec <- rep(NA, m)
+D_yl_t11_vec <- rep(NA, m)
+D_yl_t12_vec <- rep(NA, m)
+D_yl_t13_vec <- rep(NA, m)
+D_yl_t14_vec <- rep(NA, m)
+D_yl_t15_vec <- rep(NA, m)
+D_yl_t16_vec <- rep(NA, m)
+D_yl_t17_vec <- rep(NA, m)
+D_yl_t18_vec <- rep(NA, m)
+D_yl_t19_vec <- rep(NA, m)
+D_yl_t20_vec <- rep(NA, m)
+
+###############################################################
+
+for(j in 1:m){
+
+
+
+
+# Bring in Coefficients
+## Randomly sample using vcv from regression
+
+if(SampleIndep == FALSE){  
+# means_ur <-  ur_glm$coefficients
+# varcov_ur <- ur_glm$vcv
+sample_ur <- rep(0,13)
+
+means_emp <-  emp_glm$coefficients
+varcov_emp <- emp_glm$vcv
+sample_emp <- MASS::mvrnorm(n=1, means_emp, varcov_emp)  
+
+means_hpi <-  hpi_glm$coefficients
+varcov_hpi <- hpi_glm$vcv
+sample_hpi <- MASS::mvrnorm(n=1, means_hpi, varcov_hpi)  
+
+
+alpha1 <- c(rep(0,13))
+alpha2 <- c(rep(0,13))
+alpha3 <- c(rep(0,13))
+
+beta1 <- c(rep(0,13))
+beta2 <- sample_emp[1:12]
+beta3 <- sample_hpi[1:12]
+
+gammma1 <- c(rep(0,13))
+gammma2 <- sample_emp[13:24]
+gammma3 <- sample_hpi[13:24]
+
+s_winter1 <- c(rep(0,13))
+s_winter2 <- sample_emp[25:37]
+s_winter3 <- sample_hpi[25:37]
+
+s_summer1 <- c(rep(0,13))
+s_summer2 <- sample_emp[38:50]
+s_summer3 <- sample_hpi[38:50]
+
+
+fire1 <- c(rep(0,13))
+fire2 <- sample_emp[51:63]
+fire3 <- sample_hpi[51:63]
+
+flood1 <- c(rep(0,13))
+flood2 <- sample_emp[64:76]
+flood3 <- sample_hpi[64:76]
+}
+
+# Assign ND 
+if(Scenario == "Winter Storm"){
+  chosend1 <- s_winter1
+  chosend2 <- s_winter2
+  chosend3 <- s_winter3
+} else if(Scenario == "Tropical Storm"){
+  chosend1 <- s_summer1
+  chosend2 <- s_summer2
+  chosend3 <- s_summer3
+} else if(Scenario == "Fire"){
+  chosend1 <- fire1
+  chosend2 <- fire2
+  chosend3 <- fire3
+} else {
+  chosend1 <- flood1
+  chosend2 <- flood2
+  chosend3 <- flood3
+}
+
+
+# IND #####################################################
+means_ind <-  ind_glm$coefficients
+varcov_ind <- ind_glm$vcv
+sample_ind <- MASS::mvrnorm(n=1, means_ind, varcov_ind)  
+
+
+
+# Bring in Coefficients
+
+ur_coef <-  c(rep(0,13))
+emp_coef <-  c(rep(0,6),sample_ind[21:27])
+hpi_coef <-  c(sample_ind[28:40])
+
+
+
+nd_s_winter <- sample_ind[41:53]
+nd_s_summer <- sample_ind[54:66]
+nd_fire <- sample_ind[67:79]
+nd_flood <- sample_ind[80:92]
+
+
+# Assign ND 
+if(Scenario == "Winter Storm"){
+  chosend <- nd_s_winter
+} else if(Scenario == "Tropical Storm"){
+  chosend <- nd_s_summer
+} else if(Scenario == "Fire"){
+  chosend <- nd_fire
+} else {
+  chosend <- nd_flood
+}
+
+
+#######################################
+# IRF t = -1
+
+
+
+# IRF t = 0
+D_y_1_t <- chosend1[1]
+D_y_2_t <- chosend2[1]
+D_y_3_t <- chosend3[1]
+
+
+#IRF t = 1
+D_y_1_t1 <- chosend1[2] + alpha1[1]*D_y_1_t + beta1[1]*D_y_2_t + gammma1[1]*D_y_3_t
+D_y_2_t1 <- chosend2[2] + alpha2[1]*D_y_1_t + beta2[1]*D_y_2_t + gammma2[1]*D_y_3_t
+D_y_3_t1 <- chosend3[2] + alpha3[1]*D_y_1_t + beta3[1]*D_y_2_t + gammma3[1]*D_y_3_t
+
+#IRF t = 2
+D_y_1_t2 <- chosend1[3] + alpha1[1]*D_y_1_t1 + alpha1[2]*D_y_1_t + beta1[1]*D_y_2_t1 + beta1[2]*D_y_2_t + gammma1[1]*D_y_3_t1 + gammma1[2]*D_y_3_t
+D_y_2_t2 <- chosend2[3] + alpha2[1]*D_y_1_t1 + alpha2[2]*D_y_1_t + beta2[1]*D_y_2_t1 + beta2[2]*D_y_2_t + gammma2[1]*D_y_3_t1 + gammma2[2]*D_y_3_t
+D_y_3_t2 <- chosend3[3] + alpha3[1]*D_y_1_t1 + alpha3[2]*D_y_1_t + beta3[1]*D_y_2_t1 + beta3[2]*D_y_2_t + gammma3[1]*D_y_3_t1 + gammma3[2]*D_y_3_t
+
+#IRF t = 3
+D_y_1_t3 <- chosend1[4] + alpha1[1]*D_y_1_t2 + alpha1[2]*D_y_1_t1 + alpha1[3]*D_y_1_t + beta1[1]*D_y_2_t2 + beta1[2]*D_y_2_t1 + beta1[3]*D_y_2_t + gammma1[1]*D_y_3_t2 + gammma1[2]*D_y_3_t1 + gammma1[3]*D_y_3_t
+D_y_2_t3 <- chosend2[4] + alpha2[1]*D_y_1_t2 + alpha2[2]*D_y_1_t1 + alpha2[3]*D_y_1_t + beta2[1]*D_y_2_t2 + beta2[2]*D_y_2_t1 + beta2[3]*D_y_2_t + gammma2[1]*D_y_3_t2 + gammma2[2]*D_y_3_t1 + gammma2[3]*D_y_3_t
+D_y_3_t3 <- chosend3[4] + alpha3[1]*D_y_1_t2 + alpha3[2]*D_y_1_t1 + alpha3[3]*D_y_1_t + beta3[1]*D_y_2_t2 + beta3[2]*D_y_2_t1 + beta3[3]*D_y_2_t + gammma3[1]*D_y_3_t2 + gammma3[2]*D_y_3_t1 + gammma3[3]*D_y_3_t
+
+
+#IRF t = 4
+D_y_1_t4 <- chosend1[5] + alpha1[1]*D_y_1_t3 + alpha1[2]*D_y_1_t2 + alpha1[3]*D_y_1_t1 + alpha1[4]*D_y_1_t + beta1[1]*D_y_2_t3 + beta1[2]*D_y_2_t2 + beta1[3]*D_y_2_t1 + beta1[4]*D_y_2_t + 
+            gammma1[1]*D_y_3_t3 + gammma1[2]*D_y_3_t2 + gammma1[3]*D_y_3_t1 + gammma1[4]*D_y_3_t
+D_y_2_t4 <- chosend2[5] + alpha2[1]*D_y_1_t3 + alpha2[2]*D_y_1_t2 + alpha2[3]*D_y_1_t1 + alpha2[4]*D_y_1_t + beta2[1]*D_y_2_t3 + beta2[2]*D_y_2_t2 + beta2[3]*D_y_2_t1 + beta2[4]*D_y_2_t + 
+            gammma2[1]*D_y_3_t3 + gammma2[2]*D_y_3_t2 + gammma2[3]*D_y_3_t1 + gammma2[4]*D_y_3_t
+D_y_3_t4 <- chosend3[5] + alpha3[1]*D_y_1_t3 + alpha3[2]*D_y_1_t2 + alpha3[3]*D_y_1_t1 + alpha3[4]*D_y_1_t + beta3[1]*D_y_2_t3 + beta3[2]*D_y_2_t2 + beta3[3]*D_y_2_t1 + beta3[4]*D_y_2_t + 
+            gammma3[1]*D_y_3_t3 + gammma3[2]*D_y_3_t2 + gammma3[3]*D_y_3_t1 + gammma3[4]*D_y_3_t
+
+#IRF t = 5
+D_y_1_t5 <- chosend1[6] + alpha1[1]*D_y_1_t4 + alpha1[2]*D_y_1_t3 + alpha1[3]*D_y_1_t2 + alpha1[4]*D_y_1_t1 + alpha1[5]*D_y_1_t + beta1[1]*D_y_2_t4 + beta1[2]*D_y_2_t3 + beta1[3]*D_y_2_t2 + beta1[4]*D_y_2_t1 + beta1[5]*D_y_2_t +
+            gammma1[1]*D_y_3_t4 + gammma1[2]*D_y_3_t3 + gammma1[3]*D_y_3_t2 + gammma1[4]*D_y_3_t1 + gammma1[5]*D_y_3_t
+D_y_2_t5 <- chosend2[6] + alpha2[1]*D_y_1_t4 + alpha2[2]*D_y_1_t3 + alpha2[3]*D_y_1_t2 + alpha2[4]*D_y_1_t1 + alpha2[5]*D_y_1_t + beta2[1]*D_y_2_t4 + beta2[2]*D_y_2_t3 + beta2[3]*D_y_2_t2 + beta2[4]*D_y_2_t1 + beta2[5]*D_y_2_t +
+            gammma2[1]*D_y_3_t4 + gammma2[2]*D_y_3_t3 + gammma2[3]*D_y_3_t2 + gammma2[4]*D_y_3_t1 + gammma2[5]*D_y_3_t
+D_y_3_t5 <- chosend3[6] + alpha3[1]*D_y_1_t4 + alpha3[2]*D_y_1_t3 + alpha3[3]*D_y_1_t2 + alpha3[4]*D_y_1_t1 + alpha3[5]*D_y_1_t + beta3[1]*D_y_2_t4 + beta3[2]*D_y_2_t3 + beta3[3]*D_y_2_t2 + beta3[4]*D_y_2_t1 + beta3[5]*D_y_2_t +
+            gammma3[1]*D_y_3_t4 + gammma3[2]*D_y_3_t3 + gammma3[3]*D_y_3_t2 + gammma3[4]*D_y_3_t1 + gammma3[5]*D_y_3_t
+
+#IRF t = 6
+D_y_1_t6 <- chosend1[7] + alpha1[1]*D_y_1_t5 + alpha1[2]*D_y_1_t4 + alpha1[3]*D_y_1_t3 + alpha1[4]*D_y_1_t2 + alpha1[5]*D_y_1_t1 + alpha1[6]*D_y_1_t + 
+                          beta1[1]*D_y_2_t5 + beta1[2]*D_y_2_t4 + beta1[3]*D_y_2_t3 + beta1[4]*D_y_2_t2 + beta1[5]*D_y_2_t1 + beta1[6]*D_y_2_t +
+                          gammma1[1]*D_y_3_t5 + gammma1[2]*D_y_3_t4 + gammma1[3]*D_y_3_t3 + gammma1[4]*D_y_3_t2 + gammma1[5]*D_y_3_t1 + gammma1[6]*D_y_3_t
+
+D_y_2_t6 <- chosend2[7] + alpha2[1]*D_y_1_t5 + alpha2[2]*D_y_1_t4 + alpha2[3]*D_y_1_t3 + alpha2[4]*D_y_1_t2 + alpha2[5]*D_y_1_t1 + alpha2[6]*D_y_1_t + 
+                          beta2[1]*D_y_2_t5 + beta2[2]*D_y_2_t4 + beta2[3]*D_y_2_t3 + beta2[4]*D_y_2_t2 + beta2[5]*D_y_2_t1 + beta2[6]*D_y_2_t +
+                          gammma2[1]*D_y_3_t5 + gammma2[2]*D_y_3_t4 + gammma2[3]*D_y_3_t3 + gammma2[4]*D_y_3_t2 + gammma2[5]*D_y_3_t1 + gammma2[6]*D_y_3_t
+
+D_y_3_t6 <- chosend3[7] + alpha3[1]*D_y_1_t5 + alpha3[2]*D_y_1_t4 + alpha3[3]*D_y_1_t3 + alpha3[4]*D_y_1_t2 + alpha3[5]*D_y_1_t1 + alpha3[6]*D_y_1_t + 
+                          beta3[1]*D_y_2_t5 + beta3[2]*D_y_2_t4 + beta3[3]*D_y_2_t3 + beta3[4]*D_y_2_t2 + beta3[5]*D_y_2_t1 + beta3[6]*D_y_2_t +
+                          gammma3[1]*D_y_3_t5 + gammma3[2]*D_y_3_t4 + gammma3[3]*D_y_3_t3 + gammma3[4]*D_y_3_t2 + gammma3[5]*D_y_3_t1 + gammma3[6]*D_y_3_t
+
+#IRF t = 7
+D_y_1_t7 <- chosend1[8] + alpha1[1]*D_y_1_t6 + alpha1[2]*D_y_1_t5 + alpha1[3]*D_y_1_t4 + alpha1[4]*D_y_1_t3 + alpha1[5]*D_y_1_t2 + alpha1[6]*D_y_1_t1 + alpha1[7]*D_y_1_t + 
+                          beta1[1]*D_y_2_t6 + beta1[2]*D_y_2_t5 + beta1[3]*D_y_2_t4 + beta1[4]*D_y_2_t3 + beta1[5]*D_y_2_t2 + beta1[6]*D_y_2_t1 + beta1[7]*D_y_2_t +
+                          gammma1[1]*D_y_3_t6 + gammma1[2]*D_y_3_t5 + gammma1[3]*D_y_3_t4 + gammma1[4]*D_y_3_t3 + gammma1[5]*D_y_3_t2 + gammma1[6]*D_y_3_t1 + gammma1[7]*D_y_3_t
+
+D_y_2_t7 <- chosend2[8] + alpha2[1]*D_y_1_t6 + alpha2[2]*D_y_1_t5 + alpha2[3]*D_y_1_t4 + alpha2[4]*D_y_1_t3 + alpha2[5]*D_y_1_t2 + alpha2[6]*D_y_1_t1 + alpha2[7]*D_y_1_t + 
+                          beta2[1]*D_y_2_t6 + beta2[2]*D_y_2_t5 + beta2[3]*D_y_2_t4 + beta2[4]*D_y_2_t3 + beta2[5]*D_y_2_t2 + beta2[6]*D_y_2_t1 + beta2[7]*D_y_2_t +
+                          gammma2[1]*D_y_3_t6 + gammma2[2]*D_y_3_t5 + gammma2[3]*D_y_3_t4 + gammma2[4]*D_y_3_t3 + gammma2[5]*D_y_3_t2 + gammma2[6]*D_y_3_t1 + gammma2[7]*D_y_3_t
+
+D_y_3_t7 <- chosend3[8] + alpha3[1]*D_y_1_t6 + alpha3[2]*D_y_1_t5 + alpha3[3]*D_y_1_t4 + alpha3[4]*D_y_1_t3 + alpha3[5]*D_y_1_t2 + alpha3[6]*D_y_1_t1 + alpha3[7]*D_y_1_t + 
+                          beta3[1]*D_y_2_t6 + beta3[2]*D_y_2_t5 + beta3[3]*D_y_2_t4 + beta3[4]*D_y_2_t3 + beta3[5]*D_y_2_t2 + beta3[6]*D_y_2_t1 + beta3[7]*D_y_2_t +
+                          gammma3[1]*D_y_3_t6 + gammma3[2]*D_y_3_t5 + gammma3[3]*D_y_3_t4 + gammma3[4]*D_y_3_t3 + gammma3[5]*D_y_3_t2 + gammma3[6]*D_y_3_t1 + gammma3[7]*D_y_3_t
+
+
+#IRF t = 8
+D_y_1_t8 <- chosend1[9] + alpha1[1]*D_y_1_t7 + alpha1[2]*D_y_1_t6 + alpha1[3]*D_y_1_t5 + alpha1[4]*D_y_1_t4 + alpha1[5]*D_y_1_t3 + alpha1[6]*D_y_1_t2 + alpha1[7]*D_y_1_t1 + alpha1[8]*D_y_1_t + 
+                          beta1[1]*D_y_2_t7 + beta1[2]*D_y_2_t6 + beta1[3]*D_y_2_t5 + beta1[4]*D_y_2_t4 + beta1[5]*D_y_2_t3 + beta1[6]*D_y_2_t2 + beta1[7]*D_y_2_t1 + beta1[8]*D_y_2_t +
+                          gammma1[1]*D_y_3_t7 + gammma1[2]*D_y_3_t6 + gammma1[3]*D_y_3_t5 + gammma1[4]*D_y_3_t4 + gammma1[5]*D_y_3_t3 + gammma1[6]*D_y_3_t2 + gammma1[7]*D_y_3_t1 + gammma1[8]*D_y_3_t
+
+D_y_2_t8 <- chosend2[9] + alpha2[1]*D_y_1_t7 + alpha2[2]*D_y_1_t6 + alpha2[3]*D_y_1_t5 + alpha2[4]*D_y_1_t4 + alpha2[5]*D_y_1_t3 + alpha2[6]*D_y_1_t2 + alpha2[7]*D_y_1_t1 + alpha2[8]*D_y_1_t + 
+                          beta2[1]*D_y_2_t7 + beta2[2]*D_y_2_t6 + beta2[3]*D_y_2_t5 + beta2[4]*D_y_2_t4 + beta2[5]*D_y_2_t3 + beta2[6]*D_y_2_t2 + beta2[7]*D_y_2_t1 + beta2[8]*D_y_2_t +
+                          gammma2[1]*D_y_3_t7 + gammma2[2]*D_y_3_t6 + gammma2[3]*D_y_3_t5 + gammma2[4]*D_y_3_t4 + gammma2[5]*D_y_3_t3 + gammma2[6]*D_y_3_t2 + gammma2[7]*D_y_3_t1 + gammma2[8]*D_y_3_t
+
+D_y_3_t8 <- chosend3[9] + alpha3[1]*D_y_1_t7 + alpha3[2]*D_y_1_t6 + alpha3[3]*D_y_1_t5 + alpha3[4]*D_y_1_t4 + alpha3[5]*D_y_1_t3 + alpha3[6]*D_y_1_t2 + alpha3[7]*D_y_1_t1 + alpha3[8]*D_y_1_t + 
+                          beta3[1]*D_y_2_t7 + beta3[2]*D_y_2_t6 + beta3[3]*D_y_2_t5 + beta3[4]*D_y_2_t4 + beta3[5]*D_y_2_t3 + beta3[6]*D_y_2_t2 + beta3[7]*D_y_2_t1 + beta3[8]*D_y_2_t +
+                          gammma3[1]*D_y_3_t7 + gammma3[2]*D_y_3_t6 + gammma3[3]*D_y_3_t5 + gammma3[4]*D_y_3_t4 + gammma3[5]*D_y_3_t3 + gammma3[6]*D_y_3_t2 + gammma3[7]*D_y_3_t1 + gammma3[8]*D_y_3_t
+
+#IRF t = 9
+D_y_1_t9 <- chosend1[10] + alpha1[1]*D_y_1_t8 + alpha1[2]*D_y_1_t7 + alpha1[3]*D_y_1_t6 + alpha1[4]*D_y_1_t5 + alpha1[5]*D_y_1_t4 + alpha1[6]*D_y_1_t3 + alpha1[7]*D_y_1_t2 + alpha1[8]*D_y_1_t1 + alpha1[9]*D_y_1_t + 
+                          beta1[1]*D_y_2_t8 + beta1[2]*D_y_2_t7 + beta1[3]*D_y_2_t6 + beta1[4]*D_y_2_t5 + beta1[5]*D_y_2_t4 + beta1[6]*D_y_2_t3 + beta1[7]*D_y_2_t2 + beta1[8]*D_y_2_t1 + beta1[9]*D_y_2_t +
+                          gammma1[1]*D_y_3_t8 + gammma1[2]*D_y_3_t7 + gammma1[3]*D_y_3_t6 + gammma1[4]*D_y_3_t5 + gammma1[5]*D_y_3_t4 + gammma1[6]*D_y_3_t3 + gammma1[7]*D_y_3_t2 + gammma1[8]*D_y_3_t1 + gammma1[9]*D_y_3_t 
+
+D_y_2_t9 <- chosend2[10] + alpha2[1]*D_y_1_t8 + alpha2[2]*D_y_1_t7 + alpha2[3]*D_y_1_t6 + alpha2[4]*D_y_1_t5 + alpha2[5]*D_y_1_t4 + alpha2[6]*D_y_1_t3 + alpha2[7]*D_y_1_t2 + alpha2[8]*D_y_1_t1 + alpha2[9]*D_y_1_t + 
+                          beta2[1]*D_y_2_t8 + beta2[2]*D_y_2_t7 + beta2[3]*D_y_2_t6 + beta2[4]*D_y_2_t5 + beta2[5]*D_y_2_t4 + beta2[6]*D_y_2_t3 + beta2[7]*D_y_2_t2 + beta2[8]*D_y_2_t1 + beta2[9]*D_y_2_t +
+                          gammma2[1]*D_y_3_t8 + gammma2[2]*D_y_3_t7 + gammma2[3]*D_y_3_t6 + gammma2[4]*D_y_3_t5 + gammma2[5]*D_y_3_t4 + gammma2[6]*D_y_3_t3 + gammma2[7]*D_y_3_t2 + gammma2[8]*D_y_3_t1 + gammma2[9]*D_y_3_t 
+
+D_y_3_t9 <- chosend3[10] + alpha3[1]*D_y_1_t8 + alpha3[2]*D_y_1_t7 + alpha3[3]*D_y_1_t6 + alpha3[4]*D_y_1_t5 + alpha3[5]*D_y_1_t4 + alpha3[6]*D_y_1_t3 + alpha3[7]*D_y_1_t2 + alpha3[8]*D_y_1_t1 + alpha3[9]*D_y_1_t + 
+                          beta3[1]*D_y_2_t8 + beta3[2]*D_y_2_t7 + beta3[3]*D_y_2_t6 + beta3[4]*D_y_2_t5 + beta3[5]*D_y_2_t4 + beta3[6]*D_y_2_t3 + beta3[7]*D_y_2_t2 + beta3[8]*D_y_2_t1 + beta3[9]*D_y_2_t +
+                          gammma3[1]*D_y_3_t8 + gammma3[2]*D_y_3_t7 + gammma3[3]*D_y_3_t6 + gammma3[4]*D_y_3_t5 + gammma3[5]*D_y_3_t4 + gammma3[6]*D_y_3_t3 + gammma3[7]*D_y_3_t2 + gammma3[8]*D_y_3_t1 + gammma3[9]*D_y_3_t 
+
+
+#IRF t = 10
+D_y_1_t10 <- chosend1[11] + alpha1[1]*D_y_1_t9 + alpha1[2]*D_y_1_t8 + alpha1[3]*D_y_1_t7 + alpha1[4]*D_y_1_t6 + alpha1[5]*D_y_1_t5 + alpha1[6]*D_y_1_t4 + alpha1[7]*D_y_1_t3 + alpha1[8]*D_y_1_t2 + alpha1[9]*D_y_1_t1 +
+                            alpha1[10]*D_y_1_t + 
+                            beta1[1]*D_y_2_t9 + beta1[2]*D_y_2_t8 + beta1[3]*D_y_2_t7 + beta1[4]*D_y_2_t6 + beta1[5]*D_y_2_t5 + beta1[6]*D_y_2_t4 + beta1[7]*D_y_2_t3 + beta1[8]*D_y_2_t2 + beta1[9]*D_y_2_t1 +
+                            beta1[10]*D_y_2_t + 
+                            gammma1[1]*D_y_3_t9 + gammma1[2]*D_y_3_t8 + gammma1[3]*D_y_3_t7 + gammma1[4]*D_y_3_t6 + gammma1[5]*D_y_3_t5 + gammma1[6]*D_y_3_t4 + gammma1[7]*D_y_3_t3 + gammma1[8]*D_y_3_t2 + gammma1[9]*D_y_3_t1 + 
+                            gammma1[10]*D_y_3_t
+
+D_y_2_t10 <- chosend2[11] + alpha2[1]*D_y_1_t9 + alpha2[2]*D_y_1_t8 + alpha2[3]*D_y_1_t7 + alpha2[4]*D_y_1_t6 + alpha2[5]*D_y_1_t5 + alpha2[6]*D_y_1_t4 + alpha2[7]*D_y_1_t3 + alpha2[8]*D_y_1_t2 + alpha2[9]*D_y_1_t1 +
+                            alpha2[10]*D_y_1_t + 
+                            beta2[1]*D_y_2_t9 + beta2[2]*D_y_2_t8 + beta2[3]*D_y_2_t7 + beta2[4]*D_y_2_t6 + beta2[5]*D_y_2_t5 + beta2[6]*D_y_2_t4 + beta2[7]*D_y_2_t3 + beta2[8]*D_y_2_t2 + beta2[9]*D_y_2_t1 +
+                            beta2[10]*D_y_2_t + 
+                            gammma2[1]*D_y_3_t9 + gammma2[2]*D_y_3_t8 + gammma2[3]*D_y_3_t7 + gammma2[4]*D_y_3_t6 + gammma2[5]*D_y_3_t5 + gammma2[6]*D_y_3_t4 + gammma2[7]*D_y_3_t3 + gammma2[8]*D_y_3_t2 + gammma2[9]*D_y_3_t1 + 
+                            gammma2[10]*D_y_3_t
+
+D_y_3_t10 <- chosend3[11] + alpha3[1]*D_y_1_t9 + alpha3[2]*D_y_1_t8 + alpha3[3]*D_y_1_t7 + alpha3[4]*D_y_1_t6 + alpha3[5]*D_y_1_t5 + alpha3[6]*D_y_1_t4 + alpha3[7]*D_y_1_t3 + alpha3[8]*D_y_1_t2 + alpha3[9]*D_y_1_t1 +
+                            alpha3[10]*D_y_1_t + 
+                            beta3[1]*D_y_2_t9 + beta3[2]*D_y_2_t8 + beta3[3]*D_y_2_t7 + beta3[4]*D_y_2_t6 + beta3[5]*D_y_2_t5 + beta3[6]*D_y_2_t4 + beta3[7]*D_y_2_t3 + beta3[8]*D_y_2_t2 + beta3[9]*D_y_2_t1 +
+                            beta3[10]*D_y_2_t + 
+                            gammma3[1]*D_y_3_t9 + gammma3[2]*D_y_3_t8 + gammma3[3]*D_y_3_t7 + gammma3[4]*D_y_3_t6 + gammma3[5]*D_y_3_t5 + gammma3[6]*D_y_3_t4 + gammma3[7]*D_y_3_t3 + gammma3[8]*D_y_3_t2 + gammma3[9]*D_y_3_t1 + 
+                            gammma3[10]*D_y_3_t
+
+#IRF t = 11
+D_y_1_t11 <- chosend1[12] + alpha1[1]*D_y_1_t10 + alpha1[2]*D_y_1_t9 + alpha1[3]*D_y_1_t8 + alpha1[4]*D_y_1_t7 + alpha1[5]*D_y_1_t6 + alpha1[6]*D_y_1_t5 + alpha1[7]*D_y_1_t4 + alpha1[8]*D_y_1_t3 + alpha1[9]*D_y_1_t2 +
+                            alpha1[10]*D_y_1_t1 + alpha1[11]*D_y_1_t +
+                            beta1[1]*D_y_2_t10 + beta1[2]*D_y_2_t9 + beta1[3]*D_y_2_t8 + beta1[4]*D_y_2_t7 + beta1[5]*D_y_2_t6 + beta1[6]*D_y_2_t5 + beta1[7]*D_y_2_t4 + beta1[8]*D_y_2_t3 + beta1[9]*D_y_2_t2 +
+                            beta1[10]*D_y_2_t1 + beta1[11]*D_y_2_t + 
+                            gammma1[1]*D_y_3_t10 + gammma1[2]*D_y_3_t9 + gammma1[3]*D_y_3_t8 + gammma1[4]*D_y_3_t7 + gammma1[5]*D_y_3_t6 + gammma1[6]*D_y_3_t5 + gammma1[7]*D_y_3_t4 + gammma1[8]*D_y_3_t3 + gammma1[9]*D_y_3_t2 + 
+                            gammma1[10]*D_y_3_t1 + gammma1[11]*D_y_3_t
+
+D_y_2_t11 <- chosend2[12] + alpha2[1]*D_y_1_t10 + alpha2[2]*D_y_1_t9 + alpha2[3]*D_y_1_t8 + alpha2[4]*D_y_1_t7 + alpha2[5]*D_y_1_t6 + alpha2[6]*D_y_1_t5 + alpha2[7]*D_y_1_t4 + alpha2[8]*D_y_1_t3 + alpha2[9]*D_y_1_t2 +
+                            alpha2[10]*D_y_1_t1 + alpha2[11]*D_y_1_t +
+                            beta2[1]*D_y_2_t10 + beta2[2]*D_y_2_t9 + beta2[3]*D_y_2_t8 + beta2[4]*D_y_2_t7 + beta2[5]*D_y_2_t6 + beta2[6]*D_y_2_t5 + beta2[7]*D_y_2_t4 + beta2[8]*D_y_2_t3 + beta2[9]*D_y_2_t2 +
+                            beta2[10]*D_y_2_t1 + beta2[11]*D_y_2_t + 
+                            gammma2[1]*D_y_3_t10 + gammma2[2]*D_y_3_t9 + gammma2[3]*D_y_3_t8 + gammma2[4]*D_y_3_t7 + gammma2[5]*D_y_3_t6 + gammma2[6]*D_y_3_t5 + gammma2[7]*D_y_3_t4 + gammma2[8]*D_y_3_t3 + gammma2[9]*D_y_3_t2 + 
+                            gammma2[10]*D_y_3_t1 + gammma2[11]*D_y_3_t
+
+D_y_3_t11 <- chosend3[12] + alpha3[1]*D_y_1_t10 + alpha3[2]*D_y_1_t9 + alpha3[3]*D_y_1_t8 + alpha3[4]*D_y_1_t7 + alpha3[5]*D_y_1_t6 + alpha3[6]*D_y_1_t5 + alpha3[7]*D_y_1_t4 + alpha3[8]*D_y_1_t3 + alpha3[9]*D_y_1_t2 +
+                            alpha3[10]*D_y_1_t1 + alpha3[11]*D_y_1_t +
+                            beta3[1]*D_y_2_t10 + beta3[2]*D_y_2_t9 + beta3[3]*D_y_2_t8 + beta3[4]*D_y_2_t7 + beta3[5]*D_y_2_t6 + beta3[6]*D_y_2_t5 + beta3[7]*D_y_2_t4 + beta3[8]*D_y_2_t3 + beta3[9]*D_y_2_t2 +
+                            beta3[10]*D_y_2_t1 + beta3[11]*D_y_2_t + 
+                            gammma3[1]*D_y_3_t10 + gammma3[2]*D_y_3_t9 + gammma3[3]*D_y_3_t8 + gammma3[4]*D_y_3_t7 + gammma3[5]*D_y_3_t6 + gammma3[6]*D_y_3_t5 + gammma3[7]*D_y_3_t4 + gammma3[8]*D_y_3_t3 + gammma3[9]*D_y_3_t2 + 
+                            gammma3[10]*D_y_3_t1 + gammma3[11]*D_y_3_t
+
+#IRF t = 12
+D_y_1_t12 <- chosend1[13] + alpha1[1]*D_y_1_t11 + alpha1[2]*D_y_1_t10 + alpha1[3]*D_y_1_t9 + alpha1[4]*D_y_1_t8 + alpha1[5]*D_y_1_t7 + alpha1[6]*D_y_1_t6 + alpha1[7]*D_y_1_t5 + alpha1[8]*D_y_1_t4 + alpha1[9]*D_y_1_t3 +
+                            alpha1[10]*D_y_1_t2 + alpha1[11]*D_y_1_t1 + alpha1[12]*D_y_1_t +
+                            beta1[1]*D_y_2_t11 + beta1[2]*D_y_2_t10 + beta1[3]*D_y_2_t9 + beta1[4]*D_y_2_t8 + beta1[5]*D_y_2_t7 + beta1[6]*D_y_2_t6+ beta1[7]*D_y_2_t5 + beta1[8]*D_y_2_t4 + beta1[9]*D_y_2_t3 +
+                            beta1[10]*D_y_2_t2 + beta1[11]*D_y_2_t1 + beta1[12]*D_y_2_t +
+                            gammma1[1]*D_y_3_t11 + gammma1[2]*D_y_3_t10 + gammma1[3]*D_y_3_t9 + gammma1[4]*D_y_3_t8 + gammma1[5]*D_y_3_t7 + gammma1[6]*D_y_3_t6 + gammma1[7]*D_y_3_t5 + gammma1[8]*D_y_3_t4 + gammma1[9]*D_y_3_t3 + 
+                            gammma1[10]*D_y_3_t2 + gammma1[11]*D_y_3_t1 + gammma1[12]*D_y_3_t
+
+D_y_2_t12 <- chosend2[13] + alpha2[1]*D_y_1_t11 + alpha2[2]*D_y_1_t10 + alpha2[3]*D_y_1_t9 + alpha2[4]*D_y_1_t8 + alpha2[5]*D_y_1_t7 + alpha2[6]*D_y_1_t6 + alpha2[7]*D_y_1_t5 + alpha2[8]*D_y_1_t4 + alpha2[9]*D_y_1_t3 +
+                            alpha2[10]*D_y_1_t2 + alpha2[11]*D_y_1_t1 + alpha2[12]*D_y_1_t +
+                            beta2[1]*D_y_2_t11 + beta2[2]*D_y_2_t10 + beta2[3]*D_y_2_t9 + beta2[4]*D_y_2_t8 + beta2[5]*D_y_2_t7 + beta2[6]*D_y_2_t6+ beta2[7]*D_y_2_t5 + beta2[8]*D_y_2_t4 + beta2[9]*D_y_2_t3 +
+                            beta2[10]*D_y_2_t2 + beta2[11]*D_y_2_t1 + beta2[12]*D_y_2_t +
+                            gammma2[1]*D_y_3_t11 + gammma2[2]*D_y_3_t10 + gammma2[3]*D_y_3_t9 + gammma2[4]*D_y_3_t8 + gammma2[5]*D_y_3_t7 + gammma2[6]*D_y_3_t6 + gammma2[7]*D_y_3_t5 + gammma2[8]*D_y_3_t4 + gammma2[9]*D_y_3_t3 + 
+                            gammma2[10]*D_y_3_t2 + gammma2[11]*D_y_3_t1 + gammma2[12]*D_y_3_t
+
+D_y_3_t12 <- chosend3[13] + alpha3[1]*D_y_1_t11 + alpha3[2]*D_y_1_t10 + alpha3[3]*D_y_1_t9 + alpha3[4]*D_y_1_t8 + alpha3[5]*D_y_1_t7 + alpha3[6]*D_y_1_t6 + alpha3[7]*D_y_1_t5 + alpha3[8]*D_y_1_t4 + alpha3[9]*D_y_1_t3 +
+                            alpha3[10]*D_y_1_t2 + alpha3[11]*D_y_1_t1 + alpha3[12]*D_y_1_t +
+                            beta3[1]*D_y_2_t11 + beta3[2]*D_y_2_t10 + beta3[3]*D_y_2_t9 + beta3[4]*D_y_2_t8 + beta3[5]*D_y_2_t7 + beta3[6]*D_y_2_t6+ beta3[7]*D_y_2_t5 + beta3[8]*D_y_2_t4 + beta3[9]*D_y_2_t3 +
+                            beta3[10]*D_y_2_t2 + beta3[11]*D_y_2_t1 + beta3[12]*D_y_2_t +
+                            gammma3[1]*D_y_3_t11 + gammma3[2]*D_y_3_t10 + gammma3[3]*D_y_3_t9 + gammma3[4]*D_y_3_t8 + gammma3[5]*D_y_3_t7 + gammma3[6]*D_y_3_t6 + gammma3[7]*D_y_3_t5 + gammma3[8]*D_y_3_t4 + gammma3[9]*D_y_3_t3 + 
+                            gammma3[10]*D_y_3_t2 + gammma3[11]*D_y_3_t1 + gammma3[12]*D_y_3_t
+
+#IRF t = 13
+D_y_1_t13 <-      alpha1[1]*D_y_1_t12 + alpha1[2]*D_y_1_t11 + alpha1[3]*D_y_1_t10 + alpha1[4]*D_y_1_t9 + alpha1[5]*D_y_1_t8 + alpha1[6]*D_y_1_t7 + alpha1[7]*D_y_1_t6 + alpha1[8]*D_y_1_t5 + alpha1[9]*D_y_1_t4 +
+                  alpha1[10]*D_y_1_t3 + alpha1[11]*D_y_1_t2 + alpha1[12]*D_y_1_t1 +
+                  beta1[1]*D_y_2_t12 + beta1[2]*D_y_2_t11 + beta1[3]*D_y_2_t10 + beta1[4]*D_y_2_t9 + beta1[5]*D_y_2_t8 + beta1[6]*D_y_2_t7+ beta1[7]*D_y_2_t6 + beta1[8]*D_y_2_t5 + beta1[9]*D_y_2_t4 +
+                  beta1[10]*D_y_2_t3 + beta1[11]*D_y_2_t2 + beta1[12]*D_y_2_t1 +
+                  gammma1[1]*D_y_3_t12 + gammma1[2]*D_y_3_t11 + gammma1[3]*D_y_3_t10 + gammma1[4]*D_y_3_t9 + gammma1[5]*D_y_3_t8 + gammma1[6]*D_y_3_t7 + gammma1[7]*D_y_3_t6 + gammma1[8]*D_y_3_t5 + gammma1[9]*D_y_3_t4 + 
+                  gammma1[10]*D_y_3_t3 + gammma1[11]*D_y_3_t2 + gammma1[12]*D_y_3_t1
+                  
+D_y_2_t13 <-      alpha2[1]*D_y_1_t12 + alpha2[2]*D_y_1_t11 + alpha2[3]*D_y_1_t10 + alpha2[4]*D_y_1_t9 + alpha2[5]*D_y_1_t8 + alpha2[6]*D_y_1_t7 + alpha2[7]*D_y_1_t6 + alpha2[8]*D_y_1_t5 + alpha2[9]*D_y_1_t4 +
+                  alpha2[10]*D_y_1_t3 + alpha2[11]*D_y_1_t2 + alpha2[12]*D_y_1_t1 +
+                  beta2[1]*D_y_2_t12 + beta2[2]*D_y_2_t11 + beta2[3]*D_y_2_t10 + beta2[4]*D_y_2_t9 + beta2[5]*D_y_2_t8 + beta2[6]*D_y_2_t7+ beta2[7]*D_y_2_t6 + beta2[8]*D_y_2_t5 + beta2[9]*D_y_2_t4 +
+                  beta2[10]*D_y_2_t3 + beta2[11]*D_y_2_t2 + beta2[12]*D_y_2_t1 +
+                  gammma2[1]*D_y_3_t12 + gammma2[2]*D_y_3_t11 + gammma2[3]*D_y_3_t10 + gammma2[4]*D_y_3_t9 + gammma2[5]*D_y_3_t8 + gammma2[6]*D_y_3_t7 + gammma2[7]*D_y_3_t6 + gammma2[8]*D_y_3_t5 + gammma2[9]*D_y_3_t4 + 
+                  gammma2[10]*D_y_3_t3 + gammma2[11]*D_y_3_t2 + gammma2[12]*D_y_3_t1
+                  
+D_y_3_t13 <-      alpha3[1]*D_y_1_t12 + alpha3[2]*D_y_1_t11 + alpha3[3]*D_y_1_t10 + alpha3[4]*D_y_1_t9 + alpha3[5]*D_y_1_t8 + alpha3[6]*D_y_1_t7 + alpha3[7]*D_y_1_t6 + alpha3[8]*D_y_1_t5 + alpha3[9]*D_y_1_t4 +
+                  alpha3[10]*D_y_1_t3 + alpha3[11]*D_y_1_t2 + alpha3[12]*D_y_1_t1 +
+                  beta3[1]*D_y_2_t12 + beta3[2]*D_y_2_t11 + beta3[3]*D_y_2_t10 + beta3[4]*D_y_2_t9 + beta3[5]*D_y_2_t8 + beta3[6]*D_y_2_t7+ beta3[7]*D_y_2_t6 + beta3[8]*D_y_2_t5 + beta3[9]*D_y_2_t4 +
+                  beta3[10]*D_y_2_t3 + beta3[11]*D_y_2_t2 + beta3[12]*D_y_2_t1 +
+                  gammma3[1]*D_y_3_t12 + gammma3[2]*D_y_3_t11 + gammma3[3]*D_y_3_t10 + gammma3[4]*D_y_3_t9 + gammma3[5]*D_y_3_t8 + gammma3[6]*D_y_3_t7 + gammma3[7]*D_y_3_t6 + gammma3[8]*D_y_3_t5 + gammma3[9]*D_y_3_t4 + 
+                  gammma3[10]*D_y_3_t3 + gammma3[11]*D_y_3_t2 + gammma3[12]*D_y_3_t1                  
+
+                  
+#IRF t = 14
+D_y_1_t14 <-      alpha1[1]*D_y_1_t13 + alpha1[2]*D_y_1_t12 + alpha1[3]*D_y_1_t11 + alpha1[4]*D_y_1_t10 + alpha1[5]*D_y_1_t9 + alpha1[6]*D_y_1_t8 + alpha1[7]*D_y_1_t7 + alpha1[8]*D_y_1_t6 + alpha1[9]*D_y_1_t5 +
+                  alpha1[10]*D_y_1_t4 + alpha1[11]*D_y_1_t3 + alpha1[12]*D_y_1_t2 +
+                  beta1[1]*D_y_2_t13 + beta1[2]*D_y_2_t12 + beta1[3]*D_y_2_t11 + beta1[4]*D_y_2_t10 + beta1[5]*D_y_2_t9 + beta1[6]*D_y_2_t8+ beta1[7]*D_y_2_t7 + beta1[8]*D_y_2_t6 + beta1[9]*D_y_2_t5 +
+                  beta1[10]*D_y_2_t4 + beta1[11]*D_y_2_t3 + beta1[12]*D_y_2_t2 +
+                  gammma1[1]*D_y_3_t13 + gammma1[2]*D_y_3_t12 + gammma1[3]*D_y_3_t11 + gammma1[4]*D_y_3_t10+ gammma1[5]*D_y_3_t9 + gammma1[6]*D_y_3_t8 + gammma1[7]*D_y_3_t7 + gammma1[8]*D_y_3_t6 + gammma1[9]*D_y_3_t5 + 
+                  gammma1[10]*D_y_3_t4 + gammma1[11]*D_y_3_t3 + gammma1[12]*D_y_3_t2 
+                  
+D_y_2_t14 <-      alpha2[1]*D_y_1_t13 + alpha2[2]*D_y_1_t12 + alpha2[3]*D_y_1_t11 + alpha2[4]*D_y_1_t10 + alpha2[5]*D_y_1_t9 + alpha2[6]*D_y_1_t8 + alpha2[7]*D_y_1_t7 + alpha2[8]*D_y_1_t6 + alpha2[9]*D_y_1_t5 +
+                  alpha2[10]*D_y_1_t4 + alpha2[11]*D_y_1_t3 + alpha2[12]*D_y_1_t2 + 
+                  beta2[1]*D_y_2_t13 + beta2[2]*D_y_2_t12 + beta2[3]*D_y_2_t11 + beta2[4]*D_y_2_t10 + beta2[5]*D_y_2_t9 + beta2[6]*D_y_2_t8+ beta2[7]*D_y_2_t7 + beta2[8]*D_y_2_t6 + beta2[9]*D_y_2_t5 +
+                  beta2[10]*D_y_2_t4 + beta2[11]*D_y_2_t3 + beta2[12]*D_y_2_t2 +
+                  gammma2[1]*D_y_3_t13 + gammma2[2]*D_y_3_t12 + gammma2[3]*D_y_3_t11 + gammma2[4]*D_y_3_t10+ gammma2[5]*D_y_3_t9 + gammma2[6]*D_y_3_t8 + gammma2[7]*D_y_3_t7 + gammma2[8]*D_y_3_t6 + gammma2[9]*D_y_3_t5 + 
+                  gammma2[10]*D_y_3_t4 + gammma2[11]*D_y_3_t3 + gammma2[12]*D_y_3_t2     
+
+D_y_3_t14 <-      alpha3[1]*D_y_1_t13 + alpha3[2]*D_y_1_t12 + alpha3[3]*D_y_1_t11 + alpha3[4]*D_y_1_t10 + alpha3[5]*D_y_1_t9 + alpha3[6]*D_y_1_t8 + alpha3[7]*D_y_1_t7 + alpha3[8]*D_y_1_t6 + alpha3[9]*D_y_1_t5 +
+                  alpha3[10]*D_y_1_t4 + alpha3[11]*D_y_1_t3 + alpha3[12]*D_y_1_t2 +
+                  beta3[1]*D_y_2_t13 + beta3[2]*D_y_2_t12 + beta3[3]*D_y_2_t11 + beta3[4]*D_y_2_t10 + beta3[5]*D_y_2_t9 + beta3[6]*D_y_2_t8+ beta3[7]*D_y_2_t7 + beta3[8]*D_y_2_t6 + beta3[9]*D_y_2_t5 +
+                  beta3[10]*D_y_2_t4 + beta3[11]*D_y_2_t3 + beta3[12]*D_y_2_t2 +
+                  gammma3[1]*D_y_3_t13 + gammma3[2]*D_y_3_t12 + gammma3[3]*D_y_3_t11 + gammma3[4]*D_y_3_t10+ gammma3[5]*D_y_3_t9 + gammma3[6]*D_y_3_t8 + gammma3[7]*D_y_3_t7 + gammma3[8]*D_y_3_t6 + gammma3[9]*D_y_3_t5 + 
+                  gammma3[10]*D_y_3_t4 + gammma3[11]*D_y_3_t3 + gammma3[12]*D_y_3_t2
+
+#IRF t = 15
+D_y_1_t15 <-      alpha1[1]*D_y_1_t14 + alpha1[2]*D_y_1_t13 + alpha1[3]*D_y_1_t12 + alpha1[4]*D_y_1_t11 + alpha1[5]*D_y_1_t10 + alpha1[6]*D_y_1_t9 + alpha1[7]*D_y_1_t8 + alpha1[8]*D_y_1_t7 + alpha1[9]*D_y_1_t6 +
+                  alpha1[10]*D_y_1_t5 + alpha1[11]*D_y_1_t4 + alpha1[12]*D_y_1_t3 +
+                  beta1[1]*D_y_2_t14 + beta1[2]*D_y_2_t13 + beta1[3]*D_y_2_t12 + beta1[4]*D_y_2_t11 + beta1[5]*D_y_2_t10 + beta1[6]*D_y_2_t9 + beta1[7]*D_y_2_t8 + beta1[8]*D_y_2_t7 + beta1[9]*D_y_2_t6 +
+                  beta1[10]*D_y_2_t5 + beta1[11]*D_y_2_t4 + beta1[12]*D_y_2_t3 +
+                  gammma1[1]*D_y_3_t14 + gammma1[2]*D_y_3_t13 + gammma1[3]*D_y_3_t12 + gammma1[4]*D_y_3_t11+ gammma1[5]*D_y_3_t10 + gammma1[6]*D_y_3_t9 + gammma1[7]*D_y_3_t8 + gammma1[8]*D_y_3_t7 + gammma1[9]*D_y_3_t6 + 
+                  gammma1[10]*D_y_3_t5 + gammma1[11]*D_y_3_t4 + gammma1[12]*D_y_3_t3 
+
+D_y_2_t15 <-      alpha2[1]*D_y_1_t14 + alpha2[2]*D_y_1_t13 + alpha2[3]*D_y_1_t12 + alpha2[4]*D_y_1_t11 + alpha2[5]*D_y_1_t10 + alpha2[6]*D_y_1_t9 + alpha2[7]*D_y_1_t8 + alpha2[8]*D_y_1_t7 + alpha2[9]*D_y_1_t6 +
+                  alpha2[10]*D_y_1_t5 + alpha2[11]*D_y_1_t4 + alpha2[12]*D_y_1_t3 +
+                  beta2[1]*D_y_2_t14 + beta2[2]*D_y_2_t13 + beta2[3]*D_y_2_t12 + beta2[4]*D_y_2_t11 + beta2[5]*D_y_2_t10 + beta2[6]*D_y_2_t9 + beta2[7]*D_y_2_t8 + beta2[8]*D_y_2_t7 + beta2[9]*D_y_2_t6 +
+                  beta2[10]*D_y_2_t5 + beta2[11]*D_y_2_t4 + beta2[12]*D_y_2_t3 +
+                  gammma2[1]*D_y_3_t14 + gammma2[2]*D_y_3_t13 + gammma2[3]*D_y_3_t12 + gammma2[4]*D_y_3_t11+ gammma2[5]*D_y_3_t10 + gammma2[6]*D_y_3_t9 + gammma2[7]*D_y_3_t8 + gammma2[8]*D_y_3_t7 + gammma2[9]*D_y_3_t6 + 
+                  gammma2[10]*D_y_3_t5 + gammma2[11]*D_y_3_t4 + gammma2[12]*D_y_3_t3 
+
+D_y_3_t15 <-      alpha3[1]*D_y_1_t14 + alpha3[2]*D_y_1_t13 + alpha3[3]*D_y_1_t12 + alpha3[4]*D_y_1_t11 + alpha3[5]*D_y_1_t10 + alpha3[6]*D_y_1_t9 + alpha3[7]*D_y_1_t8 + alpha3[8]*D_y_1_t7 + alpha3[9]*D_y_1_t6 +
+                  alpha3[10]*D_y_1_t5 + alpha3[11]*D_y_1_t4 + alpha3[12]*D_y_1_t3 +
+                  beta3[1]*D_y_2_t14 + beta3[2]*D_y_2_t13 + beta3[3]*D_y_2_t12 + beta3[4]*D_y_2_t11 + beta3[5]*D_y_2_t10 + beta3[6]*D_y_2_t9 + beta3[7]*D_y_2_t8 + beta3[8]*D_y_2_t7 + beta3[9]*D_y_2_t6 +
+                  beta3[10]*D_y_2_t5 + beta3[11]*D_y_2_t4 + beta3[12]*D_y_2_t3 +
+                  gammma3[1]*D_y_3_t14 + gammma3[2]*D_y_3_t13 + gammma3[3]*D_y_3_t12 + gammma3[4]*D_y_3_t11+ gammma3[5]*D_y_3_t10 + gammma3[6]*D_y_3_t9 + gammma3[7]*D_y_3_t8 + gammma3[8]*D_y_3_t7 + gammma3[9]*D_y_3_t6 + 
+                  gammma3[10]*D_y_3_t5 + gammma3[11]*D_y_3_t4 + gammma3[12]*D_y_3_t3 
+                  
+
+#IRF t = 16
+D_y_1_t16 <-      alpha1[1]*D_y_1_t15 + alpha1[2]*D_y_1_t14 + alpha1[3]*D_y_1_t13 + alpha1[4]*D_y_1_t12 + alpha1[5]*D_y_1_t11 + alpha1[6]*D_y_1_t10 + alpha1[7]*D_y_1_t9 + alpha1[8]*D_y_1_t8 + alpha1[9]*D_y_1_t7 +
+                  alpha1[10]*D_y_1_t6 + alpha1[11]*D_y_1_t5 + alpha1[12]*D_y_1_t4 +
+                  beta1[1]*D_y_2_t15 + beta1[2]*D_y_2_t14 + beta1[3]*D_y_2_t13 + beta1[4]*D_y_2_t12 + beta1[5]*D_y_2_t11 + beta1[6]*D_y_2_t10 + beta1[7]*D_y_2_t9 + beta1[8]*D_y_2_t8 + beta1[9]*D_y_2_t7 +
+                  beta1[10]*D_y_2_t6 + beta1[11]*D_y_2_t5 + beta1[12]*D_y_2_t4 +
+                  gammma1[1]*D_y_3_t15 + gammma1[2]*D_y_3_t14 + gammma1[3]*D_y_3_t13 + gammma1[4]*D_y_3_t12+ gammma1[5]*D_y_3_t11 + gammma1[6]*D_y_3_t10 + gammma1[7]*D_y_3_t9 + gammma1[8]*D_y_3_t8 + gammma1[9]*D_y_3_t7 + 
+                  gammma1[10]*D_y_3_t6 + gammma1[11]*D_y_3_t5 + gammma1[12]*D_y_3_t4 
+
+D_y_2_t16 <-      alpha2[1]*D_y_1_t15 + alpha2[2]*D_y_1_t14 + alpha2[3]*D_y_1_t13 + alpha2[4]*D_y_1_t12 + alpha2[5]*D_y_1_t11 + alpha2[6]*D_y_1_t10 + alpha2[7]*D_y_1_t9 + alpha2[8]*D_y_1_t8 + alpha2[9]*D_y_1_t7 +
+                  alpha2[10]*D_y_1_t6 + alpha2[11]*D_y_1_t5 + alpha2[12]*D_y_1_t4 +
+                  beta2[1]*D_y_2_t15 + beta2[2]*D_y_2_t14 + beta2[3]*D_y_2_t13 + beta2[4]*D_y_2_t12 + beta2[5]*D_y_2_t11 + beta2[6]*D_y_2_t10 + beta2[7]*D_y_2_t9 + beta2[8]*D_y_2_t8 + beta2[9]*D_y_2_t7 +
+                  beta2[10]*D_y_2_t6 + beta2[11]*D_y_2_t5 + beta2[12]*D_y_2_t4 +
+                  gammma2[1]*D_y_3_t15 + gammma2[2]*D_y_3_t14 + gammma2[3]*D_y_3_t13 + gammma2[4]*D_y_3_t12+ gammma2[5]*D_y_3_t11 + gammma2[6]*D_y_3_t10 + gammma2[7]*D_y_3_t9 + gammma2[8]*D_y_3_t8 + gammma2[9]*D_y_3_t7 + 
+                  gammma2[10]*D_y_3_t6 + gammma2[11]*D_y_3_t5 + gammma2[12]*D_y_3_t4 
+
+D_y_3_t16 <-      alpha3[1]*D_y_1_t15 + alpha3[2]*D_y_1_t14 + alpha3[3]*D_y_1_t13 + alpha3[4]*D_y_1_t12 + alpha3[5]*D_y_1_t11 + alpha3[6]*D_y_1_t10 + alpha3[7]*D_y_1_t9 + alpha3[8]*D_y_1_t8 + alpha3[9]*D_y_1_t7 +
+                  alpha3[10]*D_y_1_t6 + alpha3[11]*D_y_1_t5 + alpha3[12]*D_y_1_t4 +
+                  beta3[1]*D_y_2_t15 + beta3[2]*D_y_2_t14 + beta3[3]*D_y_2_t13 + beta3[4]*D_y_2_t12 + beta3[5]*D_y_2_t11 + beta3[6]*D_y_2_t10 + beta3[7]*D_y_2_t9 + beta3[8]*D_y_2_t8 + beta3[9]*D_y_2_t7 +
+                  beta3[10]*D_y_2_t6 + beta3[11]*D_y_2_t5 + beta3[12]*D_y_2_t4 +
+                  gammma3[1]*D_y_3_t15 + gammma3[2]*D_y_3_t14 + gammma3[3]*D_y_3_t13 + gammma3[4]*D_y_3_t12+ gammma3[5]*D_y_3_t11 + gammma3[6]*D_y_3_t10 + gammma3[7]*D_y_3_t9 + gammma3[8]*D_y_3_t8 + gammma3[9]*D_y_3_t7 + 
+                  gammma3[10]*D_y_3_t6 + gammma3[11]*D_y_3_t5 + gammma3[12]*D_y_3_t4 
+
+
+#IRF t = 17
+D_y_1_t17 <-      alpha1[1]*D_y_1_t16 + alpha1[2]*D_y_1_t15 + alpha1[3]*D_y_1_t14 + alpha1[4]*D_y_1_t13 + alpha1[5]*D_y_1_t12 + alpha1[6]*D_y_1_t11 + alpha1[7]*D_y_1_t10 + alpha1[8]*D_y_1_t9 + alpha1[9]*D_y_1_t8 +
+                  alpha1[10]*D_y_1_t7 + alpha1[11]*D_y_1_t6 + alpha1[12]*D_y_1_t5 +
+                  beta1[1]*D_y_2_t16 + beta1[2]*D_y_2_t15 + beta1[3]*D_y_2_t14 + beta1[4]*D_y_2_t13 + beta1[5]*D_y_2_t12 + beta1[6]*D_y_2_t11 + beta1[7]*D_y_2_t10 + beta1[8]*D_y_2_t9 + beta1[9]*D_y_2_t8 +
+                  beta1[10]*D_y_2_t7 + beta1[11]*D_y_2_t6 + beta1[12]*D_y_2_t5 +
+                  gammma1[1]*D_y_3_t16 + gammma1[2]*D_y_3_t15 + gammma1[3]*D_y_3_t14 + gammma1[4]*D_y_3_t13 + gammma1[5]*D_y_3_t12 + gammma1[6]*D_y_3_t11 + gammma1[7]*D_y_3_t10 + gammma1[8]*D_y_3_t9 + gammma1[9]*D_y_3_t8 + 
+                  gammma1[10]*D_y_3_t7 + gammma1[11]*D_y_3_t6 + gammma1[12]*D_y_3_t5 
+
+D_y_2_t17 <-      alpha2[1]*D_y_1_t16 + alpha2[2]*D_y_1_t15 + alpha2[3]*D_y_1_t14 + alpha2[4]*D_y_1_t13 + alpha2[5]*D_y_1_t12 + alpha2[6]*D_y_1_t11 + alpha2[7]*D_y_1_t10 + alpha2[8]*D_y_1_t9 + alpha2[9]*D_y_1_t8 +
+                  alpha2[10]*D_y_1_t7 + alpha2[11]*D_y_1_t6 + alpha2[12]*D_y_1_t5 +
+                  beta2[1]*D_y_2_t16 + beta2[2]*D_y_2_t15 + beta2[3]*D_y_2_t14 + beta2[4]*D_y_2_t13 + beta2[5]*D_y_2_t12 + beta2[6]*D_y_2_t11 + beta2[7]*D_y_2_t10 + beta2[8]*D_y_2_t9 + beta2[9]*D_y_2_t8 +
+                  beta2[10]*D_y_2_t7 + beta2[11]*D_y_2_t6 + beta2[12]*D_y_2_t5 +
+                  gammma2[1]*D_y_3_t16 + gammma2[2]*D_y_3_t15 + gammma2[3]*D_y_3_t14 + gammma2[4]*D_y_3_t13 + gammma2[5]*D_y_3_t12 + gammma2[6]*D_y_3_t11 + gammma2[7]*D_y_3_t10 + gammma2[8]*D_y_3_t9 + gammma2[9]*D_y_3_t8 + 
+                  gammma2[10]*D_y_3_t7 + gammma2[11]*D_y_3_t6 + gammma2[12]*D_y_3_t5 
+
+D_y_3_t17 <-      alpha3[1]*D_y_1_t16 + alpha3[2]*D_y_1_t15 + alpha3[3]*D_y_1_t14 + alpha3[4]*D_y_1_t13 + alpha3[5]*D_y_1_t12 + alpha3[6]*D_y_1_t11 + alpha3[7]*D_y_1_t10 + alpha3[8]*D_y_1_t9 + alpha3[9]*D_y_1_t8 +
+                  alpha3[10]*D_y_1_t7 + alpha3[11]*D_y_1_t6 + alpha3[12]*D_y_1_t5 +
+                  beta3[1]*D_y_2_t16 + beta3[2]*D_y_2_t15 + beta3[3]*D_y_2_t14 + beta3[4]*D_y_2_t13 + beta3[5]*D_y_2_t12 + beta3[6]*D_y_2_t11 + beta3[7]*D_y_2_t10 + beta3[8]*D_y_2_t9 + beta3[9]*D_y_2_t8 +
+                  beta3[10]*D_y_2_t7 + beta3[11]*D_y_2_t6 + beta3[12]*D_y_2_t5 +
+                  gammma3[1]*D_y_3_t16 + gammma3[2]*D_y_3_t15 + gammma3[3]*D_y_3_t14 + gammma3[4]*D_y_3_t13 + gammma3[5]*D_y_3_t12 + gammma3[6]*D_y_3_t11 + gammma3[7]*D_y_3_t10 + gammma3[8]*D_y_3_t9 + gammma3[9]*D_y_3_t8 + 
+                  gammma3[10]*D_y_3_t7 + gammma3[11]*D_y_3_t6 + gammma3[12]*D_y_3_t5 
+
+#IRF t = 18
+D_y_1_t18 <-      alpha1[1]*D_y_1_t17 + alpha1[2]*D_y_1_t16 + alpha1[3]*D_y_1_t15 + alpha1[4]*D_y_1_t14 + alpha1[5]*D_y_1_t13 + alpha1[6]*D_y_1_t12 + alpha1[7]*D_y_1_t11 + alpha1[8]*D_y_1_t10 + alpha1[9]*D_y_1_t9 +
+                  alpha1[10]*D_y_1_t8 + alpha1[11]*D_y_1_t7 + alpha1[12]*D_y_1_t6 +
+                  beta1[1]*D_y_2_t17 + beta1[2]*D_y_2_t16 + beta1[3]*D_y_2_t15 + beta1[4]*D_y_2_t14 + beta1[5]*D_y_2_t13 + beta1[6]*D_y_2_t12 + beta1[7]*D_y_2_t11 + beta1[8]*D_y_2_t10 + beta1[9]*D_y_2_t9 +
+                  beta1[10]*D_y_2_t8 + beta1[11]*D_y_2_t7 + beta1[12]*D_y_2_t6 +
+                  gammma1[1]*D_y_3_t17 + gammma1[2]*D_y_3_t16 + gammma1[3]*D_y_3_t15 + gammma1[4]*D_y_3_t14 + gammma1[5]*D_y_3_t13 + gammma1[6]*D_y_3_t12 + gammma1[7]*D_y_3_t11 + gammma1[8]*D_y_3_t10 + gammma1[9]*D_y_3_t9 + 
+                  gammma1[10]*D_y_3_t8 + gammma1[11]*D_y_3_t7 + gammma1[12]*D_y_3_t6 
+
+D_y_2_t18 <-      alpha2[1]*D_y_1_t17 + alpha2[2]*D_y_1_t16 + alpha2[3]*D_y_1_t15 + alpha2[4]*D_y_1_t14 + alpha2[5]*D_y_1_t13 + alpha2[6]*D_y_1_t12 + alpha2[7]*D_y_1_t11 + alpha2[8]*D_y_1_t10 + alpha2[9]*D_y_1_t9 +
+                  alpha2[10]*D_y_1_t8 + alpha2[11]*D_y_1_t7 + alpha2[12]*D_y_1_t6 +
+                  beta2[1]*D_y_2_t17 + beta2[2]*D_y_2_t16 + beta2[3]*D_y_2_t15 + beta2[4]*D_y_2_t14 + beta2[5]*D_y_2_t13 + beta2[6]*D_y_2_t12 + beta2[7]*D_y_2_t11 + beta2[8]*D_y_2_t10 + beta2[9]*D_y_2_t9 +
+                  beta2[10]*D_y_2_t8 + beta2[11]*D_y_2_t7 + beta2[12]*D_y_2_t6 +
+                  gammma2[1]*D_y_3_t17 + gammma2[2]*D_y_3_t16 + gammma2[3]*D_y_3_t15 + gammma2[4]*D_y_3_t14 + gammma2[5]*D_y_3_t13 + gammma2[6]*D_y_3_t12 + gammma2[7]*D_y_3_t11 + gammma2[8]*D_y_3_t10 + gammma2[9]*D_y_3_t9 + 
+                  gammma2[10]*D_y_3_t8 + gammma2[11]*D_y_3_t7 + gammma2[12]*D_y_3_t6 
+
+D_y_3_t18 <-      alpha3[1]*D_y_1_t17 + alpha3[2]*D_y_1_t16 + alpha3[3]*D_y_1_t15 + alpha3[4]*D_y_1_t14 + alpha3[5]*D_y_1_t13 + alpha3[6]*D_y_1_t12 + alpha3[7]*D_y_1_t11 + alpha3[8]*D_y_1_t10 + alpha3[9]*D_y_1_t9 +
+                  alpha3[10]*D_y_1_t8 + alpha3[11]*D_y_1_t7 + alpha3[12]*D_y_1_t6 +
+                  beta3[1]*D_y_2_t17 + beta3[2]*D_y_2_t16 + beta3[3]*D_y_2_t15 + beta3[4]*D_y_2_t14 + beta3[5]*D_y_2_t13 + beta3[6]*D_y_2_t12 + beta3[7]*D_y_2_t11 + beta3[8]*D_y_2_t10 + beta3[9]*D_y_2_t9 +
+                  beta3[10]*D_y_2_t8 + beta3[11]*D_y_2_t7 + beta3[12]*D_y_2_t6 +
+                  gammma3[1]*D_y_3_t17 + gammma3[2]*D_y_3_t16 + gammma3[3]*D_y_3_t15 + gammma3[4]*D_y_3_t14 + gammma3[5]*D_y_3_t13 + gammma3[6]*D_y_3_t12 + gammma3[7]*D_y_3_t11 + gammma3[8]*D_y_3_t10 + gammma3[9]*D_y_3_t9 + 
+                  gammma3[10]*D_y_3_t8 + gammma3[11]*D_y_3_t7 + gammma3[12]*D_y_3_t6 
+
+#IRF t = 19
+D_y_1_t19 <-      alpha1[1]*D_y_1_t18 + alpha1[2]*D_y_1_t17 + alpha1[3]*D_y_1_t16 + alpha1[4]*D_y_1_t15 + alpha1[5]*D_y_1_t14 + alpha1[6]*D_y_1_t13 + alpha1[7]*D_y_1_t12 + alpha1[8]*D_y_1_t11 + alpha1[9]*D_y_1_t10 +
+                  alpha1[10]*D_y_1_t9 + alpha1[11]*D_y_1_t8 + alpha1[12]*D_y_1_t7 +
+                  beta1[1]*D_y_2_t18 + beta1[2]*D_y_2_t17 + beta1[3]*D_y_2_t16 + beta1[4]*D_y_2_t15 + beta1[5]*D_y_2_t14 + beta1[6]*D_y_2_t13 + beta1[7]*D_y_2_t12 + beta1[8]*D_y_2_t11 + beta1[9]*D_y_2_t10 +
+                  beta1[10]*D_y_2_t9 + beta1[11]*D_y_2_t8 + beta1[12]*D_y_2_t7 +
+                  gammma1[1]*D_y_3_t18 + gammma1[2]*D_y_3_t17 + gammma1[3]*D_y_3_t16 + gammma1[4]*D_y_3_t15 + gammma1[5]*D_y_3_t14 + gammma1[6]*D_y_3_t13 + gammma1[7]*D_y_3_t12 + gammma1[8]*D_y_3_t11 + gammma1[9]*D_y_3_t10 + 
+                  gammma1[10]*D_y_3_t9 + gammma1[11]*D_y_3_t8 + gammma1[12]*D_y_3_t7 
+
+D_y_2_t19 <-      alpha2[1]*D_y_1_t18 + alpha2[2]*D_y_1_t17 + alpha2[3]*D_y_1_t16 + alpha2[4]*D_y_1_t15 + alpha2[5]*D_y_1_t14 + alpha2[6]*D_y_1_t13 + alpha2[7]*D_y_1_t12 + alpha2[8]*D_y_1_t11 + alpha2[9]*D_y_1_t10 +
+                  alpha2[10]*D_y_1_t9 + alpha2[11]*D_y_1_t8 + alpha2[12]*D_y_1_t7 +
+                  beta2[1]*D_y_2_t18 + beta2[2]*D_y_2_t17 + beta2[3]*D_y_2_t16 + beta2[4]*D_y_2_t15 + beta2[5]*D_y_2_t14 + beta2[6]*D_y_2_t13 + beta2[7]*D_y_2_t12 + beta2[8]*D_y_2_t11 + beta2[9]*D_y_2_t10 +
+                  beta2[10]*D_y_2_t9 + beta2[11]*D_y_2_t8 + beta2[12]*D_y_2_t7 +
+                  gammma2[1]*D_y_3_t18 + gammma2[2]*D_y_3_t17 + gammma2[3]*D_y_3_t16 + gammma2[4]*D_y_3_t15 + gammma2[5]*D_y_3_t14 + gammma2[6]*D_y_3_t13 + gammma2[7]*D_y_3_t12 + gammma2[8]*D_y_3_t11 + gammma2[9]*D_y_3_t10 + 
+                  gammma2[10]*D_y_3_t9 + gammma2[11]*D_y_3_t8 + gammma2[12]*D_y_3_t7 
+
+D_y_3_t19 <-      alpha3[1]*D_y_1_t18 + alpha3[2]*D_y_1_t17 + alpha3[3]*D_y_1_t16 + alpha3[4]*D_y_1_t15 + alpha3[5]*D_y_1_t14 + alpha3[6]*D_y_1_t13 + alpha3[7]*D_y_1_t12 + alpha3[8]*D_y_1_t11 + alpha3[9]*D_y_1_t10 +
+                  alpha3[10]*D_y_1_t9 + alpha3[11]*D_y_1_t8 + alpha3[12]*D_y_1_t7 +
+                  beta3[1]*D_y_2_t18 + beta3[2]*D_y_2_t17 + beta3[3]*D_y_2_t16 + beta3[4]*D_y_2_t15 + beta3[5]*D_y_2_t14 + beta3[6]*D_y_2_t13 + beta3[7]*D_y_2_t12 + beta3[8]*D_y_2_t11 + beta3[9]*D_y_2_t10 +
+                  beta3[10]*D_y_2_t9 + beta3[11]*D_y_2_t8 + beta3[12]*D_y_2_t7 +
+                  gammma3[1]*D_y_3_t18 + gammma3[2]*D_y_3_t17 + gammma3[3]*D_y_3_t16 + gammma3[4]*D_y_3_t15 + gammma3[5]*D_y_3_t14 + gammma3[6]*D_y_3_t13 + gammma3[7]*D_y_3_t12 + gammma3[8]*D_y_3_t11 + gammma3[9]*D_y_3_t10 + 
+                  gammma3[10]*D_y_3_t9 + gammma3[11]*D_y_3_t8 + gammma3[12]*D_y_3_t7 
+
+#IRF t = 20
+D_y_1_t20 <-      alpha1[1]*D_y_1_t19 + alpha1[2]*D_y_1_t18 + alpha1[3]*D_y_1_t17 + alpha1[4]*D_y_1_t16 + alpha1[5]*D_y_1_t15 + alpha1[6]*D_y_1_t14 + alpha1[7]*D_y_1_t13 + alpha1[8]*D_y_1_t12 + alpha1[9]*D_y_1_t11 +
+                  alpha1[10]*D_y_1_t10 + alpha1[11]*D_y_1_t9 + alpha1[12]*D_y_1_t8 +
+                  beta1[1]*D_y_2_t19 + beta1[2]*D_y_2_t18 + beta1[3]*D_y_2_t17 + beta1[4]*D_y_2_t16 + beta1[5]*D_y_2_t15 + beta1[6]*D_y_2_t14 + beta1[7]*D_y_2_t13 + beta1[8]*D_y_2_t12 + beta1[9]*D_y_2_t11 +
+                  beta1[10]*D_y_2_t10 + beta1[11]*D_y_2_t9 + beta1[12]*D_y_2_t8 +
+                  gammma1[1]*D_y_3_t19 + gammma1[2]*D_y_3_t18 + gammma1[3]*D_y_3_t17 + gammma1[4]*D_y_3_t16 + gammma1[5]*D_y_3_t15 + gammma1[6]*D_y_3_t14 + gammma1[7]*D_y_3_t13 + gammma1[8]*D_y_3_t12 + gammma1[9]*D_y_3_t11 + 
+                  gammma1[10]*D_y_3_t10 + gammma1[11]*D_y_3_t9 + gammma1[12]*D_y_3_t8 
+
+D_y_2_t20 <-      alpha2[1]*D_y_1_t19 + alpha2[2]*D_y_1_t18 + alpha2[3]*D_y_1_t17 + alpha2[4]*D_y_1_t16 + alpha2[5]*D_y_1_t15 + alpha2[6]*D_y_1_t14 + alpha2[7]*D_y_1_t13 + alpha2[8]*D_y_1_t12 + alpha2[9]*D_y_1_t11 +
+                  alpha2[10]*D_y_1_t10 + alpha2[11]*D_y_1_t9 + alpha2[12]*D_y_1_t8 +
+                  beta2[1]*D_y_2_t19 + beta2[2]*D_y_2_t18 + beta2[3]*D_y_2_t17 + beta2[4]*D_y_2_t16 + beta2[5]*D_y_2_t15 + beta2[6]*D_y_2_t14 + beta2[7]*D_y_2_t13 + beta2[8]*D_y_2_t12 + beta2[9]*D_y_2_t11 +
+                  beta2[10]*D_y_2_t10 + beta2[11]*D_y_2_t9 + beta2[12]*D_y_2_t8 +
+                  gammma2[1]*D_y_3_t19 + gammma2[2]*D_y_3_t18 + gammma2[3]*D_y_3_t17 + gammma2[4]*D_y_3_t16 + gammma2[5]*D_y_3_t15 + gammma2[6]*D_y_3_t14 + gammma2[7]*D_y_3_t13 + gammma2[8]*D_y_3_t12 + gammma2[9]*D_y_3_t11 + 
+                  gammma2[10]*D_y_3_t10 + gammma2[11]*D_y_3_t9 + gammma2[12]*D_y_3_t8 
+
+D_y_3_t20 <-      alpha3[1]*D_y_1_t19 + alpha3[2]*D_y_1_t18 + alpha3[3]*D_y_1_t17 + alpha3[4]*D_y_1_t16 + alpha3[5]*D_y_1_t15 + alpha3[6]*D_y_1_t14 + alpha3[7]*D_y_1_t13 + alpha3[8]*D_y_1_t12 + alpha3[9]*D_y_1_t11 +
+                  alpha3[10]*D_y_1_t10 + alpha3[11]*D_y_1_t9 + alpha3[12]*D_y_1_t8 +
+                  beta3[1]*D_y_2_t19 + beta3[2]*D_y_2_t18 + beta3[3]*D_y_2_t17 + beta3[4]*D_y_2_t16 + beta3[5]*D_y_2_t15 + beta3[6]*D_y_2_t14 + beta3[7]*D_y_2_t13 + beta3[8]*D_y_2_t12 + beta3[9]*D_y_2_t11 +
+                  beta3[10]*D_y_2_t10 + beta3[11]*D_y_2_t9 + beta3[12]*D_y_2_t8 +
+                  gammma3[1]*D_y_3_t19 + gammma3[2]*D_y_3_t18 + gammma3[3]*D_y_3_t17 + gammma3[4]*D_y_3_t16 + gammma3[5]*D_y_3_t15 + gammma3[6]*D_y_3_t14 + gammma3[7]*D_y_3_t13 + gammma3[8]*D_y_3_t12 + gammma3[9]*D_y_3_t11 + 
+                  gammma3[10]*D_y_3_t10 + gammma3[11]*D_y_3_t9 + gammma3[12]*D_y_3_t8 
+
+
+
+
+
+# IND #########################################
+
+
+
+# IRF t = 0
+D_yl_t <- ur_coef[1]*D_y_1_t + emp_coef[1]*D_y_2_t + hpi_coef[1]*D_y_3_t + chosend[1]
+
+# IRF t = 1
+D_yl_t1 <- ur_coef[1]*D_y_1_t1 + ur_coef[2]*D_y_1_t + 
+           emp_coef[1]*D_y_2_t1 + emp_coef[2]*D_y_2_t + 
+           hpi_coef[1]*D_y_3_t1 + hpi_coef[2]*D_y_3_t +
+           chosend[2]
+
+# IRF t = 2
+D_yl_t2 <- ur_coef[1]*D_y_1_t2 + ur_coef[2]*D_y_1_t1 + ur_coef[3]*D_y_1_t + 
+           emp_coef[1]*D_y_2_t2 + emp_coef[2]*D_y_2_t1 + emp_coef[3]*D_y_2_t + 
+           hpi_coef[1]*D_y_3_t2 + hpi_coef[2]*D_y_3_t1 + hpi_coef[3]*D_y_3_t +
+           chosend[3]
+
+# IRF t = 3
+D_yl_t3 <- ur_coef[1]*D_y_1_t3 + ur_coef[2]*D_y_1_t2 + ur_coef[3]*D_y_1_t1 + ur_coef[4]*D_y_1_t + 
+           emp_coef[1]*D_y_2_t3 + emp_coef[2]*D_y_2_t2 + emp_coef[3]*D_y_2_t1 + emp_coef[4]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t3 + hpi_coef[2]*D_y_3_t2 + hpi_coef[3]*D_y_3_t1 + hpi_coef[4]*D_y_3_t +
+           chosend[4]
+
+# IRF t = 4
+D_yl_t4 <- ur_coef[1]*D_y_1_t4 + ur_coef[2]*D_y_1_t3 + ur_coef[3]*D_y_1_t2 + ur_coef[4]*D_y_1_t1 + ur_coef[5]*D_y_1_t + 
+           emp_coef[1]*D_y_2_t4 + emp_coef[2]*D_y_2_t3 + emp_coef[3]*D_y_2_t2 + emp_coef[4]*D_y_2_t1 + emp_coef[5]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t4 + hpi_coef[2]*D_y_3_t3 + hpi_coef[3]*D_y_3_t2 + hpi_coef[4]*D_y_3_t1 + hpi_coef[5]*D_y_3_t +
+           chosend[5]
+
+
+# IRF t = 5
+D_yl_t5 <- ur_coef[1]*D_y_1_t5 + ur_coef[2]*D_y_1_t4 + ur_coef[3]*D_y_1_t3 + ur_coef[4]*D_y_1_t2 + ur_coef[5]*D_y_1_t1 + ur_coef[6]*D_y_1_t +
+           emp_coef[1]*D_y_2_t5 + emp_coef[2]*D_y_2_t4 + emp_coef[3]*D_y_2_t3 + emp_coef[4]*D_y_2_t2 + emp_coef[5]*D_y_2_t1 + emp_coef[6]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t5 + hpi_coef[2]*D_y_3_t4 + hpi_coef[3]*D_y_3_t3 + hpi_coef[4]*D_y_3_t2 + hpi_coef[5]*D_y_3_t1 + hpi_coef[6]*D_y_3_t +
+           chosend[6]
+
+
+# IRF t = 6
+D_yl_t6 <- ur_coef[1]*D_y_1_t6 + ur_coef[2]*D_y_1_t5 + ur_coef[3]*D_y_1_t4 + ur_coef[4]*D_y_1_t3 + ur_coef[5]*D_y_1_t2 + ur_coef[6]*D_y_1_t1 + ur_coef[7]*D_y_1_t +
+           emp_coef[1]*D_y_2_t6 + emp_coef[2]*D_y_2_t5 + emp_coef[3]*D_y_2_t4 + emp_coef[4]*D_y_2_t3 + emp_coef[5]*D_y_2_t2 + emp_coef[6]*D_y_2_t1 + emp_coef[7]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t6 + hpi_coef[2]*D_y_3_t5 + hpi_coef[3]*D_y_3_t4 + hpi_coef[4]*D_y_3_t3 + hpi_coef[5]*D_y_3_t2 + hpi_coef[6]*D_y_3_t1 + hpi_coef[7]*D_y_3_t +
+           chosend[7]
+
+# IRF t = 7
+D_yl_t7 <- ur_coef[1]*D_y_1_t7 + ur_coef[2]*D_y_1_t6 + ur_coef[3]*D_y_1_t5 + ur_coef[4]*D_y_1_t4 + ur_coef[5]*D_y_1_t3 + ur_coef[6]*D_y_1_t2 + ur_coef[7]*D_y_1_t1 + ur_coef[8]*D_y_1_t +
+           emp_coef[1]*D_y_2_t7 + emp_coef[2]*D_y_2_t6 + emp_coef[3]*D_y_2_t5 + emp_coef[4]*D_y_2_t4 + emp_coef[5]*D_y_2_t3 + emp_coef[6]*D_y_2_t2 + emp_coef[7]*D_y_2_t1 + emp_coef[8]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t7 + hpi_coef[2]*D_y_3_t6 + hpi_coef[3]*D_y_3_t5 + hpi_coef[4]*D_y_3_t4 + hpi_coef[5]*D_y_3_t3 + hpi_coef[6]*D_y_3_t2 + hpi_coef[7]*D_y_3_t1 + hpi_coef[8]*D_y_3_t +
+           chosend[8]
+
+# IRF t = 8
+D_yl_t8 <- ur_coef[1]*D_y_1_t8 + ur_coef[2]*D_y_1_t7 + ur_coef[3]*D_y_1_t6 + ur_coef[4]*D_y_1_t5 + ur_coef[5]*D_y_1_t4 + ur_coef[6]*D_y_1_t3 + ur_coef[7]*D_y_1_t2 + ur_coef[8]*D_y_1_t1 + ur_coef[9]*D_y_1_t +
+           emp_coef[1]*D_y_2_t8 + emp_coef[2]*D_y_2_t7 + emp_coef[3]*D_y_2_t6 + emp_coef[4]*D_y_2_t5 + emp_coef[5]*D_y_2_t4 + emp_coef[6]*D_y_2_t3 + emp_coef[7]*D_y_2_t2 + emp_coef[8]*D_y_2_t1 + emp_coef[9]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t8 + hpi_coef[2]*D_y_3_t7 + hpi_coef[3]*D_y_3_t6 + hpi_coef[4]*D_y_3_t5 + hpi_coef[5]*D_y_3_t4 + hpi_coef[6]*D_y_3_t3 + hpi_coef[7]*D_y_3_t2 + hpi_coef[8]*D_y_3_t1 + hpi_coef[9]*D_y_3_t +
+           chosend[9]
+
+# IRF t = 9
+D_yl_t9 <- ur_coef[1]*D_y_1_t9 + ur_coef[2]*D_y_1_t8 + ur_coef[3]*D_y_1_t7 + ur_coef[4]*D_y_1_t6 + ur_coef[5]*D_y_1_t5 + ur_coef[6]*D_y_1_t4 + ur_coef[7]*D_y_1_t3 + ur_coef[8]*D_y_1_t2 + ur_coef[9]*D_y_1_t1 +
+           ur_coef[10]*D_y_1_t +
+           emp_coef[1]*D_y_2_t9 + emp_coef[2]*D_y_2_t8 + emp_coef[3]*D_y_2_t7 + emp_coef[4]*D_y_2_t6 + emp_coef[5]*D_y_2_t5 + emp_coef[6]*D_y_2_t4 + emp_coef[7]*D_y_2_t3 + emp_coef[8]*D_y_2_t2 + emp_coef[9]*D_y_2_t1 +
+           emp_coef[10]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t9 + hpi_coef[2]*D_y_3_t8 + hpi_coef[3]*D_y_3_t7 + hpi_coef[4]*D_y_3_t6 + hpi_coef[5]*D_y_3_t5 + hpi_coef[6]*D_y_3_t4 + hpi_coef[7]*D_y_3_t3 + hpi_coef[8]*D_y_3_t2 + hpi_coef[9]*D_y_3_t1 +
+           hpi_coef[10]*D_y_3_t +
+           chosend[10]
+
+# IRF t = 10
+D_yl_t10 <- ur_coef[1]*D_y_1_t10 + ur_coef[2]*D_y_1_t9 + ur_coef[3]*D_y_1_t8 + ur_coef[4]*D_y_1_t7 + ur_coef[5]*D_y_1_t6 + ur_coef[6]*D_y_1_t5 + ur_coef[7]*D_y_1_t4 + ur_coef[8]*D_y_1_t3 + ur_coef[9]*D_y_1_t2 +
+           ur_coef[10]*D_y_1_t1 + ur_coef[11]*D_y_1_t +
+           emp_coef[1]*D_y_2_t10 + emp_coef[2]*D_y_2_t9 + emp_coef[3]*D_y_2_t8 + emp_coef[4]*D_y_2_t7 + emp_coef[5]*D_y_2_t6 + emp_coef[6]*D_y_2_t5 + emp_coef[7]*D_y_2_t4 + emp_coef[8]*D_y_2_t3 + emp_coef[9]*D_y_2_t2 +
+           emp_coef[10]*D_y_2_t1 + emp_coef[11]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t10 + hpi_coef[2]*D_y_3_t9 + hpi_coef[3]*D_y_3_t8 + hpi_coef[4]*D_y_3_t7 + hpi_coef[5]*D_y_3_t6 + hpi_coef[6]*D_y_3_t5 + hpi_coef[7]*D_y_3_t4 + hpi_coef[8]*D_y_3_t3 + hpi_coef[9]*D_y_3_t2 +
+           hpi_coef[10]*D_y_3_t1 + hpi_coef[11]*D_y_3_t +
+           chosend[11]
+
+# IRF t = 11
+D_yl_t11 <- ur_coef[1]*D_y_1_t11 + ur_coef[2]*D_y_1_t10 + ur_coef[3]*D_y_1_t9 + ur_coef[4]*D_y_1_t8 + ur_coef[5]*D_y_1_t7 + ur_coef[6]*D_y_1_t6 + ur_coef[7]*D_y_1_t5 + ur_coef[8]*D_y_1_t4 + ur_coef[9]*D_y_1_t3 +
+           ur_coef[10]*D_y_1_t2 + ur_coef[11]*D_y_1_t1 + ur_coef[12]*D_y_1_t +
+           emp_coef[1]*D_y_2_t11 + emp_coef[2]*D_y_2_t10 + emp_coef[3]*D_y_2_t9 + emp_coef[4]*D_y_2_t8 + emp_coef[5]*D_y_2_t7 + emp_coef[6]*D_y_2_t6 + emp_coef[7]*D_y_2_t5 + emp_coef[8]*D_y_2_t4 + emp_coef[9]*D_y_2_t3 +
+           emp_coef[10]*D_y_2_t2 + emp_coef[11]*D_y_2_t1 + emp_coef[12]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t11 + hpi_coef[2]*D_y_3_t10 + hpi_coef[3]*D_y_3_t9 + hpi_coef[4]*D_y_3_t8 + hpi_coef[5]*D_y_3_t7 + hpi_coef[6]*D_y_3_t6 + hpi_coef[7]*D_y_3_t5 + hpi_coef[8]*D_y_3_t4 + hpi_coef[9]*D_y_3_t3 +
+           hpi_coef[10]*D_y_3_t2 + hpi_coef[11]*D_y_3_t1 + hpi_coef[12]*D_y_3_t +
+           chosend[12]
+
+# IRF t = 12
+D_yl_t12 <- ur_coef[1]*D_y_1_t12 + ur_coef[2]*D_y_1_t11 + ur_coef[3]*D_y_1_t10 + ur_coef[4]*D_y_1_t9 + ur_coef[5]*D_y_1_t8 + ur_coef[6]*D_y_1_t7 + ur_coef[7]*D_y_1_t6 + ur_coef[8]*D_y_1_t5 + ur_coef[9]*D_y_1_t4 +
+           ur_coef[10]*D_y_1_t3 + ur_coef[11]*D_y_1_t2 + ur_coef[12]*D_y_1_t1 + ur_coef[13]*D_y_1_t +
+           emp_coef[1]*D_y_2_t12 + emp_coef[2]*D_y_2_t11 + emp_coef[3]*D_y_2_t10 + emp_coef[4]*D_y_2_t9 + emp_coef[5]*D_y_2_t8 + emp_coef[6]*D_y_2_t7 + emp_coef[7]*D_y_2_t6 + emp_coef[8]*D_y_2_t5 + emp_coef[9]*D_y_2_t4 +
+           emp_coef[10]*D_y_2_t3 + emp_coef[11]*D_y_2_t2 + emp_coef[12]*D_y_2_t1 + emp_coef[13]*D_y_2_t +
+           hpi_coef[1]*D_y_3_t12 + hpi_coef[2]*D_y_3_t11 + hpi_coef[3]*D_y_3_t10 + hpi_coef[4]*D_y_3_t9 + hpi_coef[5]*D_y_3_t8 + hpi_coef[6]*D_y_3_t7 + hpi_coef[7]*D_y_3_t6 + hpi_coef[8]*D_y_3_t5 + hpi_coef[9]*D_y_3_t4 +
+           hpi_coef[10]*D_y_3_t3 + hpi_coef[11]*D_y_3_t2 + hpi_coef[12]*D_y_3_t1 + hpi_coef[13]*D_y_3_t +
+           chosend[13]
+
+# IRF t = 13
+D_yl_t13 <- ur_coef[1]*D_y_1_t13 + ur_coef[2]*D_y_1_t12 + ur_coef[3]*D_y_1_t11 + ur_coef[4]*D_y_1_t10 + ur_coef[5]*D_y_1_t9 + ur_coef[6]*D_y_1_t8 + ur_coef[7]*D_y_1_t7 + ur_coef[8]*D_y_1_t6 + ur_coef[9]*D_y_1_t5 +
+           ur_coef[10]*D_y_1_t4 + ur_coef[11]*D_y_1_t3 + ur_coef[12]*D_y_1_t2 + ur_coef[13]*D_y_1_t1 +
+           emp_coef[1]*D_y_2_t13 + emp_coef[2]*D_y_2_t12 + emp_coef[3]*D_y_2_t11 + emp_coef[4]*D_y_2_t10 + emp_coef[5]*D_y_2_t9 + emp_coef[6]*D_y_2_t8 + emp_coef[7]*D_y_2_t7 + emp_coef[8]*D_y_2_t6 + emp_coef[9]*D_y_2_t5 +
+           emp_coef[10]*D_y_2_t4 + emp_coef[11]*D_y_2_t3 + emp_coef[12]*D_y_2_t2 + emp_coef[13]*D_y_2_t1 +
+           hpi_coef[1]*D_y_3_t13 + hpi_coef[2]*D_y_3_t12 + hpi_coef[3]*D_y_3_t11 + hpi_coef[4]*D_y_3_t10 + hpi_coef[5]*D_y_3_t9 + hpi_coef[6]*D_y_3_t8 + hpi_coef[7]*D_y_3_t7 + hpi_coef[8]*D_y_3_t6 + hpi_coef[9]*D_y_3_t5 +
+           hpi_coef[10]*D_y_3_t4 + hpi_coef[11]*D_y_3_t3 + hpi_coef[12]*D_y_3_t2 + hpi_coef[13]*D_y_3_t1
+
+# IRF t = 14
+D_yl_t14 <- ur_coef[1]*D_y_1_t14 + ur_coef[2]*D_y_1_t13 + ur_coef[3]*D_y_1_t12 + ur_coef[4]*D_y_1_t11 + ur_coef[5]*D_y_1_t10 + ur_coef[6]*D_y_1_t9 + ur_coef[7]*D_y_1_t8 + ur_coef[8]*D_y_1_t7 + ur_coef[9]*D_y_1_t6 +
+           ur_coef[10]*D_y_1_t5 + ur_coef[11]*D_y_1_t4 + ur_coef[12]*D_y_1_t3 + ur_coef[13]*D_y_1_t2 +
+           emp_coef[1]*D_y_2_t14 + emp_coef[2]*D_y_2_t13 + emp_coef[3]*D_y_2_t12 + emp_coef[4]*D_y_2_t11 + emp_coef[5]*D_y_2_t10 + emp_coef[6]*D_y_2_t9 + emp_coef[7]*D_y_2_t8 + emp_coef[8]*D_y_2_t7 + emp_coef[9]*D_y_2_t6 +
+           emp_coef[10]*D_y_2_t5 + emp_coef[11]*D_y_2_t4 + emp_coef[12]*D_y_2_t3 + emp_coef[13]*D_y_2_t2 +
+           hpi_coef[1]*D_y_3_t14 + hpi_coef[2]*D_y_3_t13 + hpi_coef[3]*D_y_3_t12 + hpi_coef[4]*D_y_3_t11 + hpi_coef[5]*D_y_3_t10 + hpi_coef[6]*D_y_3_t9 + hpi_coef[7]*D_y_3_t8 + hpi_coef[8]*D_y_3_t7 + hpi_coef[9]*D_y_3_t6 +
+           hpi_coef[10]*D_y_3_t5 + hpi_coef[11]*D_y_3_t4 + hpi_coef[12]*D_y_3_t3 + hpi_coef[13]*D_y_3_t2
+
+# IRF t = 15
+D_yl_t15 <- ur_coef[1]*D_y_1_t15 + ur_coef[2]*D_y_1_t14 + ur_coef[3]*D_y_1_t13 + ur_coef[4]*D_y_1_t12 + ur_coef[5]*D_y_1_t11 + ur_coef[6]*D_y_1_t10 + ur_coef[7]*D_y_1_t9 + ur_coef[8]*D_y_1_t8 + ur_coef[9]*D_y_1_t7 +
+           ur_coef[10]*D_y_1_t6 + ur_coef[11]*D_y_1_t5 + ur_coef[12]*D_y_1_t4 + ur_coef[13]*D_y_1_t3 +
+           emp_coef[1]*D_y_2_t15 + emp_coef[2]*D_y_2_t14 + emp_coef[3]*D_y_2_t13 + emp_coef[4]*D_y_2_t12 + emp_coef[5]*D_y_2_t11 + emp_coef[6]*D_y_2_t10 + emp_coef[7]*D_y_2_t9 + emp_coef[8]*D_y_2_t8 + emp_coef[9]*D_y_2_t7 +
+           emp_coef[10]*D_y_2_t6 + emp_coef[11]*D_y_2_t5 + emp_coef[12]*D_y_2_t4 + emp_coef[13]*D_y_2_t3 +
+           hpi_coef[1]*D_y_3_t15 + hpi_coef[2]*D_y_3_t14 + hpi_coef[3]*D_y_3_t13 + hpi_coef[4]*D_y_3_t12 + hpi_coef[5]*D_y_3_t11 + hpi_coef[6]*D_y_3_t10 + hpi_coef[7]*D_y_3_t9 + hpi_coef[8]*D_y_3_t8 + hpi_coef[9]*D_y_3_t7 +
+           hpi_coef[10]*D_y_3_t6 + hpi_coef[11]*D_y_3_t5 + hpi_coef[12]*D_y_3_t4 + hpi_coef[13]*D_y_3_t3
+
+# IRF t = 16
+D_yl_t16 <- ur_coef[1]*D_y_1_t16 + ur_coef[2]*D_y_1_t15 + ur_coef[3]*D_y_1_t14 + ur_coef[4]*D_y_1_t13 + ur_coef[5]*D_y_1_t12 + ur_coef[6]*D_y_1_t11 + ur_coef[7]*D_y_1_t10 + ur_coef[8]*D_y_1_t9 + ur_coef[9]*D_y_1_t8 +
+           ur_coef[10]*D_y_1_t7 + ur_coef[11]*D_y_1_t6 + ur_coef[12]*D_y_1_t5 + ur_coef[13]*D_y_1_t4 +
+           emp_coef[1]*D_y_2_t16 + emp_coef[2]*D_y_2_t15 + emp_coef[3]*D_y_2_t14 + emp_coef[4]*D_y_2_t13 + emp_coef[5]*D_y_2_t12 + emp_coef[6]*D_y_2_t11 + emp_coef[7]*D_y_2_t10 + emp_coef[8]*D_y_2_t9 + emp_coef[9]*D_y_2_t8 +
+           emp_coef[10]*D_y_2_t7 + emp_coef[11]*D_y_2_t6 + emp_coef[12]*D_y_2_t5 + emp_coef[13]*D_y_2_t4 +
+           hpi_coef[1]*D_y_3_t16 + hpi_coef[2]*D_y_3_t15 + hpi_coef[3]*D_y_3_t14 + hpi_coef[4]*D_y_3_t13 + hpi_coef[5]*D_y_3_t12 + hpi_coef[6]*D_y_3_t11 + hpi_coef[7]*D_y_3_t10 + hpi_coef[8]*D_y_3_t9 + hpi_coef[9]*D_y_3_t8 +
+           hpi_coef[10]*D_y_3_t7 + hpi_coef[11]*D_y_3_t6 + hpi_coef[12]*D_y_3_t5 + hpi_coef[13]*D_y_3_t4
+
+# IRF t = 17
+D_yl_t17 <- ur_coef[1]*D_y_1_t17 + ur_coef[2]*D_y_1_t16 + ur_coef[3]*D_y_1_t15 + ur_coef[4]*D_y_1_t14 + ur_coef[5]*D_y_1_t13 + ur_coef[6]*D_y_1_t12 + ur_coef[7]*D_y_1_t11 + ur_coef[8]*D_y_1_t10 + ur_coef[9]*D_y_1_t9 +
+           ur_coef[10]*D_y_1_t8 + ur_coef[11]*D_y_1_t7 + ur_coef[12]*D_y_1_t6 + ur_coef[13]*D_y_1_t5 +
+           emp_coef[1]*D_y_2_t17 + emp_coef[2]*D_y_2_t16 + emp_coef[3]*D_y_2_t15 + emp_coef[4]*D_y_2_t14 + emp_coef[5]*D_y_2_t13 + emp_coef[6]*D_y_2_t12 + emp_coef[7]*D_y_2_t11 + emp_coef[8]*D_y_2_t10 + emp_coef[9]*D_y_2_t9 +
+           emp_coef[10]*D_y_2_t8 + emp_coef[11]*D_y_2_t7 + emp_coef[12]*D_y_2_t6 + emp_coef[13]*D_y_2_t5 +
+           hpi_coef[1]*D_y_3_t17 + hpi_coef[2]*D_y_3_t16 + hpi_coef[3]*D_y_3_t15 + hpi_coef[4]*D_y_3_t14 + hpi_coef[5]*D_y_3_t13 + hpi_coef[6]*D_y_3_t12 + hpi_coef[7]*D_y_3_t11 + hpi_coef[8]*D_y_3_t10 + hpi_coef[9]*D_y_3_t9 +
+           hpi_coef[10]*D_y_3_t8 + hpi_coef[11]*D_y_3_t7 + hpi_coef[12]*D_y_3_t6 + hpi_coef[13]*D_y_3_t5
+
+# IRF t = 18
+D_yl_t18 <- ur_coef[1]*D_y_1_t18 + ur_coef[2]*D_y_1_t17 + ur_coef[3]*D_y_1_t16 + ur_coef[4]*D_y_1_t15 + ur_coef[5]*D_y_1_t14 + ur_coef[6]*D_y_1_t13 + ur_coef[7]*D_y_1_t12 + ur_coef[8]*D_y_1_t11 + ur_coef[9]*D_y_1_t10 +
+           ur_coef[10]*D_y_1_t9 + ur_coef[11]*D_y_1_t8 + ur_coef[12]*D_y_1_t7 + ur_coef[13]*D_y_1_t6 +
+           emp_coef[1]*D_y_2_t18 + emp_coef[2]*D_y_2_t17 + emp_coef[3]*D_y_2_t16 + emp_coef[4]*D_y_2_t15 + emp_coef[5]*D_y_2_t14 + emp_coef[6]*D_y_2_t13 + emp_coef[7]*D_y_2_t12 + emp_coef[8]*D_y_2_t11 + emp_coef[9]*D_y_2_t10 +
+           emp_coef[10]*D_y_2_t9 + emp_coef[11]*D_y_2_t8 + emp_coef[12]*D_y_2_t7 + emp_coef[13]*D_y_2_t6 +
+           hpi_coef[1]*D_y_3_t18 + hpi_coef[2]*D_y_3_t17 + hpi_coef[3]*D_y_3_t16 + hpi_coef[4]*D_y_3_t15 + hpi_coef[5]*D_y_3_t14 + hpi_coef[6]*D_y_3_t13 + hpi_coef[7]*D_y_3_t12 + hpi_coef[8]*D_y_3_t11 + hpi_coef[9]*D_y_3_t10 +
+           hpi_coef[10]*D_y_3_t9 + hpi_coef[11]*D_y_3_t8 + hpi_coef[12]*D_y_3_t7 + hpi_coef[13]*D_y_3_t6
+
+# IRF t = 19
+D_yl_t19 <- ur_coef[1]*D_y_1_t19 + ur_coef[2]*D_y_1_t18 + ur_coef[3]*D_y_1_t17 + ur_coef[4]*D_y_1_t16 + ur_coef[5]*D_y_1_t15 + ur_coef[6]*D_y_1_t14 + ur_coef[7]*D_y_1_t13 + ur_coef[8]*D_y_1_t12 + ur_coef[9]*D_y_1_t11 +
+           ur_coef[10]*D_y_1_t10 + ur_coef[11]*D_y_1_t9 + ur_coef[12]*D_y_1_t8 + ur_coef[13]*D_y_1_t7 +
+           emp_coef[1]*D_y_2_t19 + emp_coef[2]*D_y_2_t18 + emp_coef[3]*D_y_2_t17 + emp_coef[4]*D_y_2_t16 + emp_coef[5]*D_y_2_t15 + emp_coef[6]*D_y_2_t14 + emp_coef[7]*D_y_2_t13 + emp_coef[8]*D_y_2_t12 + emp_coef[9]*D_y_2_t11 +
+           emp_coef[10]*D_y_2_t10 + emp_coef[11]*D_y_2_t9 + emp_coef[12]*D_y_2_t8 + emp_coef[13]*D_y_2_t7 +
+           hpi_coef[1]*D_y_3_t19 + hpi_coef[2]*D_y_3_t18 + hpi_coef[3]*D_y_3_t17 + hpi_coef[4]*D_y_3_t16 + hpi_coef[5]*D_y_3_t15 + hpi_coef[6]*D_y_3_t14 + hpi_coef[7]*D_y_3_t13 + hpi_coef[8]*D_y_3_t12 + hpi_coef[9]*D_y_3_t11 +
+           hpi_coef[10]*D_y_3_t10 + hpi_coef[11]*D_y_3_t9 + hpi_coef[12]*D_y_3_t8 + hpi_coef[13]*D_y_3_t7
+
+# IRF t = 20
+D_yl_t20 <- ur_coef[1]*D_y_1_t20 + ur_coef[2]*D_y_1_t19 + ur_coef[3]*D_y_1_t18 + ur_coef[4]*D_y_1_t17 + ur_coef[5]*D_y_1_t16 + ur_coef[6]*D_y_1_t15 + ur_coef[7]*D_y_1_t14 + ur_coef[8]*D_y_1_t13 + ur_coef[9]*D_y_1_t12 +
+           ur_coef[10]*D_y_1_t11 + ur_coef[11]*D_y_1_t10 + ur_coef[12]*D_y_1_t9 + ur_coef[13]*D_y_1_t8 +
+           emp_coef[1]*D_y_2_t20 + emp_coef[2]*D_y_2_t19 + emp_coef[3]*D_y_2_t18 + emp_coef[4]*D_y_2_t17 + emp_coef[5]*D_y_2_t16 + emp_coef[6]*D_y_2_t15 + emp_coef[7]*D_y_2_t14 + emp_coef[8]*D_y_2_t13 + emp_coef[9]*D_y_2_t12 +
+           emp_coef[10]*D_y_2_t11 + emp_coef[11]*D_y_2_t10 + emp_coef[12]*D_y_2_t9 + emp_coef[13]*D_y_2_t8 +
+           hpi_coef[1]*D_y_3_t20 + hpi_coef[2]*D_y_3_t19 + hpi_coef[3]*D_y_3_t18 + hpi_coef[4]*D_y_3_t17 + hpi_coef[5]*D_y_3_t16 + hpi_coef[6]*D_y_3_t15 + hpi_coef[7]*D_y_3_t14 + hpi_coef[8]*D_y_3_t13 + hpi_coef[9]*D_y_3_t12 +
+           hpi_coef[10]*D_y_3_t11 + hpi_coef[11]*D_y_3_t10 + hpi_coef[12]*D_y_3_t9 + hpi_coef[13]*D_y_3_t8
+
+##########################################################################
+
+
+
+
+D_y_1_t_vec[j] <- D_y_1_t
+D_y_1_t1_vec[j] <- D_y_1_t1
+D_y_1_t2_vec[j] <- D_y_1_t2
+D_y_1_t3_vec[j] <- D_y_1_t3
+D_y_1_t4_vec[j] <- D_y_1_t4
+D_y_1_t5_vec[j] <- D_y_1_t5
+D_y_1_t6_vec[j] <- D_y_1_t6
+D_y_1_t7_vec[j] <- D_y_1_t7
+D_y_1_t8_vec[j] <- D_y_1_t8
+D_y_1_t9_vec[j] <- D_y_1_t9
+D_y_1_t10_vec[j] <- D_y_1_t10
+D_y_1_t11_vec[j] <- D_y_1_t11
+D_y_1_t12_vec[j] <- D_y_1_t12
+D_y_1_t13_vec[j] <- D_y_1_t13
+D_y_1_t14_vec[j] <- D_y_1_t14
+D_y_1_t15_vec[j] <- D_y_1_t15
+D_y_1_t16_vec[j] <- D_y_1_t16
+D_y_1_t17_vec[j] <- D_y_1_t17
+D_y_1_t18_vec[j] <- D_y_1_t18
+D_y_1_t19_vec[j] <- D_y_1_t19
+D_y_1_t20_vec[j] <- D_y_1_t20
+
+D_y_2_t_vec[j] <- D_y_2_t
+D_y_2_t1_vec[j] <- D_y_2_t1
+D_y_2_t2_vec[j] <- D_y_2_t2
+D_y_2_t3_vec[j] <- D_y_2_t3
+D_y_2_t4_vec[j] <- D_y_2_t4
+D_y_2_t5_vec[j] <- D_y_2_t5
+D_y_2_t6_vec[j] <- D_y_2_t6
+D_y_2_t7_vec[j] <- D_y_2_t7
+D_y_2_t8_vec[j] <- D_y_2_t8
+D_y_2_t9_vec[j] <- D_y_2_t9
+D_y_2_t10_vec[j] <- D_y_2_t10
+D_y_2_t11_vec[j] <- D_y_2_t11
+D_y_2_t12_vec[j] <- D_y_2_t12
+D_y_2_t13_vec[j] <- D_y_2_t13
+D_y_2_t14_vec[j] <- D_y_2_t14
+D_y_2_t15_vec[j] <- D_y_2_t15
+D_y_2_t16_vec[j] <- D_y_2_t16
+D_y_2_t17_vec[j] <- D_y_2_t17
+D_y_2_t18_vec[j] <- D_y_2_t18
+D_y_2_t19_vec[j] <- D_y_2_t19
+D_y_2_t20_vec[j] <- D_y_2_t20
+
+D_y_3_t_vec[j] <- D_y_3_t
+D_y_3_t1_vec[j] <- D_y_3_t1
+D_y_3_t2_vec[j] <- D_y_3_t2
+D_y_3_t3_vec[j] <- D_y_3_t3
+D_y_3_t4_vec[j] <- D_y_3_t4
+D_y_3_t5_vec[j] <- D_y_3_t5
+D_y_3_t6_vec[j] <- D_y_3_t6
+D_y_3_t7_vec[j] <- D_y_3_t7
+D_y_3_t8_vec[j] <- D_y_3_t8
+D_y_3_t9_vec[j] <- D_y_3_t9
+D_y_3_t10_vec[j] <- D_y_3_t10
+D_y_3_t11_vec[j] <- D_y_3_t11
+D_y_3_t12_vec[j] <- D_y_3_t12
+D_y_3_t13_vec[j] <- D_y_3_t13
+D_y_3_t14_vec[j] <- D_y_3_t14
+D_y_3_t15_vec[j] <- D_y_3_t15
+D_y_3_t16_vec[j] <- D_y_3_t16
+D_y_3_t17_vec[j] <- D_y_3_t17
+D_y_3_t18_vec[j] <- D_y_3_t18
+D_y_3_t19_vec[j] <- D_y_3_t19
+D_y_3_t20_vec[j] <- D_y_3_t20
+
+
+
+# IND ################################################
+
+D_yl_t_vec[j] <- D_yl_t
+D_yl_t1_vec[j] <- D_yl_t1
+D_yl_t2_vec[j] <- D_yl_t2
+D_yl_t3_vec[j] <- D_yl_t3
+D_yl_t4_vec[j] <- D_yl_t4
+D_yl_t5_vec[j] <- D_yl_t5
+D_yl_t6_vec[j] <- D_yl_t6
+D_yl_t7_vec[j] <- D_yl_t7
+D_yl_t8_vec[j] <- D_yl_t8
+D_yl_t9_vec[j] <- D_yl_t9
+D_yl_t10_vec[j] <- D_yl_t10
+D_yl_t11_vec[j] <- D_yl_t11
+D_yl_t12_vec[j] <- D_yl_t12
+D_yl_t13_vec[j] <- D_yl_t13
+D_yl_t14_vec[j] <- D_yl_t14
+D_yl_t15_vec[j] <- D_yl_t15
+D_yl_t16_vec[j] <- D_yl_t16
+D_yl_t17_vec[j] <- D_yl_t17
+D_yl_t18_vec[j] <- D_yl_t18
+D_yl_t19_vec[j] <- D_yl_t19
+D_yl_t20_vec[j] <- D_yl_t20
+
+###############################################################
+
+#if(m%%20 == 0){
+  print(j)
+#}
+
+}
+
+
+y1_shockL <- c(D_y_1_t_vec %>% quantile(0.025),
+               D_y_1_t1_vec %>% quantile(0.025),
+               D_y_1_t2_vec %>% quantile(0.025),
+               D_y_1_t3_vec %>% quantile(0.025),
+               D_y_1_t4_vec %>% quantile(0.025),
+               D_y_1_t5_vec %>% quantile(0.025),
+               D_y_1_t6_vec %>% quantile(0.025),
+               D_y_1_t7_vec %>% quantile(0.025),
+               D_y_1_t8_vec %>% quantile(0.025),
+               D_y_1_t9_vec %>% quantile(0.025),
+               D_y_1_t10_vec %>% quantile(0.025),
+               D_y_1_t11_vec %>% quantile(0.025),
+               D_y_1_t12_vec %>% quantile(0.025),
+               D_y_1_t13_vec %>% quantile(0.025),
+               D_y_1_t14_vec %>% quantile(0.025),
+               D_y_1_t15_vec %>% quantile(0.025),
+               D_y_1_t16_vec %>% quantile(0.025),
+               D_y_1_t17_vec %>% quantile(0.025),
+               D_y_1_t18_vec %>% quantile(0.025),
+               D_y_1_t19_vec %>% quantile(0.025),
+               D_y_1_t20_vec %>% quantile(0.025)
+               )
+
+y1_shockU <- c(D_y_1_t_vec %>% quantile(0.975),
+               D_y_1_t1_vec %>% quantile(0.975),
+               D_y_1_t2_vec %>% quantile(0.975),
+               D_y_1_t3_vec %>% quantile(0.975),
+               D_y_1_t4_vec %>% quantile(0.975),
+               D_y_1_t5_vec %>% quantile(0.975),
+               D_y_1_t6_vec %>% quantile(0.975),
+               D_y_1_t7_vec %>% quantile(0.975),
+               D_y_1_t8_vec %>% quantile(0.975),
+               D_y_1_t9_vec %>% quantile(0.975),
+               D_y_1_t10_vec %>% quantile(0.975),
+               D_y_1_t11_vec %>% quantile(0.975),
+               D_y_1_t12_vec %>% quantile(0.975),
+               D_y_1_t13_vec %>% quantile(0.975),
+               D_y_1_t14_vec %>% quantile(0.975),
+               D_y_1_t15_vec %>% quantile(0.975),
+               D_y_1_t16_vec %>% quantile(0.975),
+               D_y_1_t17_vec %>% quantile(0.975),
+               D_y_1_t18_vec %>% quantile(0.975),
+               D_y_1_t19_vec %>% quantile(0.975),
+               D_y_1_t20_vec %>% quantile(0.975)
+               )
+
+y2_shockL <- c(D_y_2_t_vec %>% quantile(0.025),
+               D_y_2_t1_vec %>% quantile(0.025),
+               D_y_2_t2_vec %>% quantile(0.025),
+               D_y_2_t3_vec %>% quantile(0.025),
+               D_y_2_t4_vec %>% quantile(0.025),
+               D_y_2_t5_vec %>% quantile(0.025),
+               D_y_2_t6_vec %>% quantile(0.025),
+               D_y_2_t7_vec %>% quantile(0.025),
+               D_y_2_t8_vec %>% quantile(0.025),
+               D_y_2_t9_vec %>% quantile(0.025),
+               D_y_2_t10_vec %>% quantile(0.025),
+               D_y_2_t11_vec %>% quantile(0.025),
+               D_y_2_t12_vec %>% quantile(0.025),
+               D_y_2_t13_vec %>% quantile(0.025),
+               D_y_2_t14_vec %>% quantile(0.025),
+               D_y_2_t15_vec %>% quantile(0.025),
+               D_y_2_t16_vec %>% quantile(0.025),
+               D_y_2_t17_vec %>% quantile(0.025),
+               D_y_2_t18_vec %>% quantile(0.025),
+               D_y_2_t19_vec %>% quantile(0.025),
+               D_y_2_t20_vec %>% quantile(0.025)
+               )
+
+y2_shockU <- c(D_y_2_t_vec %>% quantile(0.975),
+               D_y_2_t1_vec %>% quantile(0.975),
+               D_y_2_t2_vec %>% quantile(0.975),
+               D_y_2_t3_vec %>% quantile(0.975),
+               D_y_2_t4_vec %>% quantile(0.975),
+               D_y_2_t5_vec %>% quantile(0.975),
+               D_y_2_t6_vec %>% quantile(0.975),
+               D_y_2_t7_vec %>% quantile(0.975),
+               D_y_2_t8_vec %>% quantile(0.975),
+               D_y_2_t9_vec %>% quantile(0.975),
+               D_y_2_t10_vec %>% quantile(0.975),
+               D_y_2_t11_vec %>% quantile(0.975),
+               D_y_2_t12_vec %>% quantile(0.975),
+               D_y_2_t13_vec %>% quantile(0.975),
+               D_y_2_t14_vec %>% quantile(0.975),
+               D_y_2_t15_vec %>% quantile(0.975),
+               D_y_2_t16_vec %>% quantile(0.975),
+               D_y_2_t17_vec %>% quantile(0.975),
+               D_y_2_t18_vec %>% quantile(0.975),
+               D_y_2_t19_vec %>% quantile(0.975),
+               D_y_2_t20_vec %>% quantile(0.975)
+               )
+
+y3_shockL <- c(D_y_3_t_vec %>% quantile(0.025),
+               D_y_3_t1_vec %>% quantile(0.025),
+               D_y_3_t2_vec %>% quantile(0.025),
+               D_y_3_t3_vec %>% quantile(0.025),
+               D_y_3_t4_vec %>% quantile(0.025),
+               D_y_3_t5_vec %>% quantile(0.025),
+               D_y_3_t6_vec %>% quantile(0.025),
+               D_y_3_t7_vec %>% quantile(0.025),
+               D_y_3_t8_vec %>% quantile(0.025),
+               D_y_3_t9_vec %>% quantile(0.025),
+               D_y_3_t10_vec %>% quantile(0.025),
+               D_y_3_t11_vec %>% quantile(0.025),
+               D_y_3_t12_vec %>% quantile(0.025),
+               D_y_3_t13_vec %>% quantile(0.025),
+               D_y_3_t14_vec %>% quantile(0.025),
+               D_y_3_t15_vec %>% quantile(0.025),
+               D_y_3_t16_vec %>% quantile(0.025),
+               D_y_3_t17_vec %>% quantile(0.025),
+               D_y_3_t18_vec %>% quantile(0.025),
+               D_y_3_t19_vec %>% quantile(0.025),
+               D_y_3_t20_vec %>% quantile(0.025)
+               )
+
+y3_shockU <- c(D_y_3_t_vec %>% quantile(0.975),
+               D_y_3_t1_vec %>% quantile(0.975),
+               D_y_3_t2_vec %>% quantile(0.975),
+               D_y_3_t3_vec %>% quantile(0.975),
+               D_y_3_t4_vec %>% quantile(0.975),
+               D_y_3_t5_vec %>% quantile(0.975),
+               D_y_3_t6_vec %>% quantile(0.975),
+               D_y_3_t7_vec %>% quantile(0.975),
+               D_y_3_t8_vec %>% quantile(0.975),
+               D_y_3_t9_vec %>% quantile(0.975),
+               D_y_3_t10_vec %>% quantile(0.975),
+               D_y_3_t11_vec %>% quantile(0.975),
+               D_y_3_t12_vec %>% quantile(0.975),
+               D_y_3_t13_vec %>% quantile(0.975),
+               D_y_3_t14_vec %>% quantile(0.975),
+               D_y_3_t15_vec %>% quantile(0.975),
+               D_y_3_t16_vec %>% quantile(0.975),
+               D_y_3_t17_vec %>% quantile(0.975),
+               D_y_3_t18_vec %>% quantile(0.975),
+               D_y_3_t19_vec %>% quantile(0.975),
+               D_y_3_t20_vec %>% quantile(0.975)
+               )
+
+# IND ##########################
+
+yl_shockL <- c(D_yl_t_vec %>% quantile(0.025),
+               D_yl_t1_vec %>% quantile(0.025),
+               D_yl_t2_vec %>% quantile(0.025),
+               D_yl_t3_vec %>% quantile(0.025),
+               D_yl_t4_vec %>% quantile(0.025),
+               D_yl_t5_vec %>% quantile(0.025),
+               D_yl_t6_vec %>% quantile(0.025),
+               D_yl_t7_vec %>% quantile(0.025),
+               D_yl_t8_vec %>% quantile(0.025),
+               D_yl_t9_vec %>% quantile(0.025),
+               D_yl_t10_vec %>% quantile(0.025),
+               D_yl_t11_vec %>% quantile(0.025),
+               D_yl_t12_vec %>% quantile(0.025),
+               D_yl_t13_vec %>% quantile(0.025),
+               D_yl_t14_vec %>% quantile(0.025),
+               D_yl_t15_vec %>% quantile(0.025),
+               D_yl_t16_vec %>% quantile(0.025),
+               D_yl_t17_vec %>% quantile(0.025),
+               D_yl_t18_vec %>% quantile(0.025),
+               D_yl_t19_vec %>% quantile(0.025),
+               D_yl_t20_vec %>% quantile(0.025)
+               )
+
+yl_shockU <- c(D_yl_t_vec %>% quantile(0.975),
+               D_yl_t1_vec %>% quantile(0.975),
+               D_yl_t2_vec %>% quantile(0.975),
+               D_yl_t3_vec %>% quantile(0.975),
+               D_yl_t4_vec %>% quantile(0.975),
+               D_yl_t5_vec %>% quantile(0.975),
+               D_yl_t6_vec %>% quantile(0.975),
+               D_yl_t7_vec %>% quantile(0.975),
+               D_yl_t8_vec %>% quantile(0.975),
+               D_yl_t9_vec %>% quantile(0.975),
+               D_yl_t10_vec %>% quantile(0.975),
+               D_yl_t11_vec %>% quantile(0.975),
+               D_yl_t12_vec %>% quantile(0.975),
+               D_yl_t13_vec %>% quantile(0.975),
+               D_yl_t14_vec %>% quantile(0.975),
+               D_yl_t15_vec %>% quantile(0.975),
+               D_yl_t16_vec %>% quantile(0.975),
+               D_yl_t17_vec %>% quantile(0.975),
+               D_yl_t18_vec %>% quantile(0.975),
+               D_yl_t19_vec %>% quantile(0.975),
+               D_yl_t20_vec %>% quantile(0.975)
+               )
+
+############################################################
+```
+
+
+# GRAPHS
+```{r}
+library(patchwork)
+
+
+y1shocks <- cbind(Lower = y1_shockL, Upper = y1_shockU, Lag = 0:20, Estimated = IRF1Vector) %>% as.data.frame()
+y2shocks <- cbind(Lower = y2_shockL, Upper = y2_shockU, Lag = 0:20, Estimated = IRF2Vector) %>% as.data.frame()
+y3shocks <- cbind(Lower = y3_shockL, Upper = y3_shockU, Lag = 0:20, Estimated = IRF3Vector) %>% as.data.frame()
+
+
+d2 <- y2shocks %>% ggplot(aes(x = Lag)) + geom_line(aes(y = 100*Lower),linetype="1111", color = "red", size = 2) + geom_line(aes(y = 100*Upper),linetype="1111", color = "red", size = 2) + geom_line(aes(y = 100*Estimated), size = 2) + geom_hline(yintercept = 0) + theme_bw() + ggtitle(paste0("IRF of the % Change in Employment -  ", Scenario)) + xlab("Quarters") + ylab("")+theme(axis.text.x=element_text(size=15),axis.text.y=element_text(size=15),plot.title = element_text(size=18),axis.title=element_text(size=14,face="bold"))
+d3 <- y3shocks %>% ggplot(aes(x = Lag)) + geom_line(aes(y = 100*Lower),linetype="1111", color = "red", size = 2) + geom_line(aes(y = 100*Upper),linetype="1111", color = "red", size = 2) + geom_line(aes(y = 100*Estimated), size = 2) + geom_hline(yintercept = 0) + theme_bw() + ggtitle(paste0("IRF of the % Change in House Prices - ", Scenario)) + xlab("Quarters") + ylab("")+theme(axis.text.x=element_text(size=15),axis.text.y=element_text(size=15),plot.title = element_text(size=18),axis.title=element_text(size=14,face="bold"))
+
+p2 <- d2+d3
+
+#Cumulative
+a2 <- y2shocks %>% mutate(Lower = cumsum(Lower), Upper = cumsum(Upper), Estimated = cumsum(Estimated)) %>% ggplot(aes(x = Lag)) + geom_line(aes(y = 100*Lower),linetype="1111", color = "red", size = 2) + geom_line(aes(y = 100*Upper),linetype="1111", color = "red", size = 2) + geom_line(aes(y = 100*Estimated), size = 2) + geom_hline(yintercept = 0) + theme_bw() + ggtitle(paste0("Cumulated IRF of the % Change in Employment -  ", Scenario)) + xlab("Quarters") + ylab("")+theme(axis.text.x=element_text(size=15),axis.text.y=element_text(size=15),plot.title = element_text(size=18),axis.title=element_text(size=14,face="bold"))
+a3 <- y3shocks %>% mutate(Lower = cumsum(Lower), Upper = cumsum(Upper), Estimated = cumsum(Estimated)) %>% ggplot(aes(x = Lag)) + geom_line(aes(y = 100*Lower),linetype="1111", color = "red", size = 2) + geom_line(aes(y = 100*Upper),linetype="1111", color = "red", size = 2) + geom_line(aes(y = 100*Estimated), size = 2) + geom_hline(yintercept = 0) + theme_bw() + ggtitle(paste0("Cumulated IRF of the % Change in House Prices - ", Scenario)) + xlab("Quarters") + ylab("")+theme(axis.text.x=element_text(size=15),axis.text.y=element_text(size=15),plot.title = element_text(size=18),axis.title=element_text(size=14,face="bold"))
+
+p1 <- a2+a3
+# IND ##########################################################
+
+ylshocks <- cbind(Lower = yl_shockL, Upper = yl_shockU, Lag = 0:20, Estimated = IRFlVector) %>% as.data.frame() %>% mutate(Lower = 100*Lower/.5, Upper = 100*Upper/.5, Estimated = 100*Estimated/.5)
+
+
+def1 <- ylshocks %>% ggplot(aes(x = Lag)) + geom_line(aes(y = Lower),linetype="1111", color = "red", size = 2) + geom_line(aes(y = Upper),linetype="1111", color = "red", size = 2) + geom_line(aes(y = Estimated), size = 2) + geom_hline(yintercept = 0) + theme_bw() + ggtitle(paste0("IRF of the % Change in Probability of Default - ", Scenario)) + xlab("Quarters") + ylab("")+theme(axis.text.x=element_text(size=15),axis.text.y=element_text(size=15),plot.title = element_text(size=18),axis.title=element_text(size=14,face="bold"))
+
+#cumulative
+
+def2 <- ylshocks %>% mutate(Lower = cumsum(Lower), Upper = cumsum(Upper), Estimated = cumsum(Estimated)) %>% ggplot(aes(x = Lag)) + geom_line(aes(y = Lower),linetype="1111", color = "red", size = 2) + geom_line(aes(y = Upper),linetype="1111", color = "red", size = 2) + geom_line(aes(y = Estimated), size = 2) + geom_hline(yintercept = 0) + theme_bw() + ggtitle(paste0("Cumulated IRF of the % Change in Probability of Default - ", Scenario)) + xlab("Quarters") + ylab("")+theme(axis.text.x=element_text(size=15),axis.text.y=element_text(size=15),plot.title = element_text(size=18),axis.title=element_text(size=14,face="bold"))
+
+###########
+########################
+# y1 = unemployment
+# y2 = employment
+# y3 = house prices
+########################
+
+p2
+p1+p1
+
+```
+
+
+
+
+
+#Combining Graphs
+
+```{r}
+if(Scenario == "Winter Storm"){
+WSE <- d2
+WSH <- d3
+
+WSEC <- a2
+WSHC <- a3
+
+WSP <- def1
+WSCP <- def2
+
+} else if(Scenario == "Tropical Storm"){
+SSE <- d2
+SSH <- d3
+
+SSEC <- a2
+SSHC <- a3
+
+SSP <- def1
+SSCP <- def2
+
+} else if(Scenario == "Fire"){
+FireE <- d2
+FireH <- d3
+
+FireEC <- a2
+FireHC <- a3
+
+FireP <- def1
+FireCP <- def2
+
+} else {
+FloodE <- d2
+FloodH <- d3
+
+FloodEC <- a2
+FloodHC <- a3
+
+FloodP <- def1
+FloodCP <- def2
+
+}
+```
+
+
+
+
+#Sewing Graphs
+
+```{r}
+econIRF <- WSE+WSH+SSE+SSH+FireE+FireH+FloodE+FloodH+plot_layout(nrow =4)
+econCIRF <- WSEC+WSHC+SSEC+SSHC+FireEC+FireHC+FloodEC+FloodHC+plot_layout(nrow =4)
+
+pdIRF <- WSP+SSP+FireP+FloodP+plot_layout(nrow = 4)
+pdCIRF <- WSCP+SSCP+FireCP+FloodCP+plot_layout(nrow = 4)
+```
+
+
+
+# Check
+```{r}
+ChosenSampleDataFF2 %>% select(age,age_1,age_2,age_3,age_4) %>% unique() %>% mutate(MaturationEffect = age_1*ind_glm$coefficients[1]+age_2*ind_glm$coefficients[2]+age_3*ind_glm$coefficients[3]+age_4*ind_glm$coefficients[4]) %>% ggplot(aes(x = age, y = MaturationEffect))+ geom_line(size =2) + theme_bw()+theme(axis.text.x=element_text(size=15),axis.text.y=element_text(size=15),plot.title = element_text(size=18),axis.title=element_text(size=14,face="bold")) + xlab("Age of Mortgage in Years") + ylab("Increase in PD") + ggtitle("Maturation Effect")
+
+```
+
+
+# HERE
